@@ -91,7 +91,7 @@ class LockedRoomEnv(gym.Env):
         size: int = 19,
         observation_mode: str = "full_map",
         render_mode: Optional[str] = "human",
-        max_steps: int = 500,
+        max_steps: int = 1000,
         agent_view_size: int = 7,
         # Position configuration
         fixed_agent_pos: Optional[Tuple[int, int]] = None,

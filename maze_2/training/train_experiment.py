@@ -24,35 +24,35 @@ from environments import (
     get_config,
     apply_reward_wrapper,
     list_configs,
-    list_reward_types,
     ALL_ENV_CONFIGS,
     REWARD_WRAPPERS,
 )
 
 
 class FlattenObservation(gym.ObservationWrapper):
-    """Flatten dict observation to vector for MLP policies"""
+    """
+    Simple observation wrapper - just position and direction.
+    Much easier to learn than full grid.
+    """
 
     def __init__(self, env):
         super().__init__(env)
-
-        image_size = np.prod(env.observation_space["image"].shape)
-        extra_size = 4 + 7  # direction (4) + carrying (7)
-
-        self.observation_space = spaces.Box(
-            low=0, high=255, shape=(image_size + extra_size,), dtype=np.float32
-        )
+        self.observation_space = spaces.Box(0, 20, (5,), np.float32)
 
     def observation(self, obs):
-        image_flat = obs["image"].flatten().astype(np.float32)
-
-        direction_onehot = np.zeros(4, dtype=np.float32)
-        direction_onehot[obs["direction"]] = 1.0
-
-        carrying_onehot = np.zeros(7, dtype=np.float32)
-        carrying_onehot[obs["carrying"]] = 1.0
-
-        return np.concatenate([image_flat, direction_onehot, carrying_onehot])
+        base_env = self.env
+        while hasattr(base_env, "env"):
+            base_env = base_env.env
+        return np.array(
+            [
+                base_env.agent_pos[0],
+                base_env.agent_pos[1],
+                base_env.goal_pos[0],
+                base_env.goal_pos[1],
+                base_env.agent_dir,
+            ],
+            dtype=np.float32,
+        )
 
 
 def create_env(env_id: str, reward_id: str, obs_mode: str, render_mode: Optional[str] = None):
@@ -268,17 +268,12 @@ def list_options():
     list_configs()
 
     print("\n--- Reward Strategies ---")
-    list_reward_types()
+    print("  simple - Distance + step penalty + room bonus")
 
     print("\n--- Algorithms ---")
-    print("  PPO  - Proximal Policy Optimization (recommended)")
+    print("  PPO  - Proximal Policy Optimization")
     print("  DQN  - Deep Q-Network")
     print("  A2C  - Advantage Actor-Critic")
-
-    print("\n--- Observation Modes ---")
-    print("  full_map     - Agent sees entire grid (easiest)")
-    print("  partial_view - Agent sees local area")
-    print("  agent_view   - First-person view (hardest)")
 
     print("\n" + "=" * 70)
 

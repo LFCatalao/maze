@@ -13,14 +13,17 @@ from .configs import (
     list_configs,
     ALL_ENV_CONFIGS,
 )
-from ...maze_3.reward_wrappers import (
-    SparseRewardWrapper,
-    DistanceRewardWrapper,
-    StepPenaltyRewardWrapper,
-    CombinedRewardWrapper,
+from .reward_wrappers import (
+    SimpleRewardWrapper,
     apply_reward_wrapper,
-    list_reward_types,
     REWARD_WRAPPERS,
+    REWARD_GOAL,
+    REWARD_CLOSER,
+    PENALTY_FURTHER,
+    PENALTY_STEP,
+    REWARD_ROOM,
+    REWARD_TURN,
+    SimpleObs,
 )
 
 __all__ = [
@@ -41,11 +44,14 @@ __all__ = [
     "list_configs",
     "ALL_ENV_CONFIGS",
     # Rewards
-    "SparseRewardWrapper",
-    "DistanceRewardWrapper",
-    "StepPenaltyRewardWrapper",
-    "CombinedRewardWrapper",
+    "SimpleRewardWrapper",
     "apply_reward_wrapper",
-    "list_reward_types",
     "REWARD_WRAPPERS",
+    "REWARD_GOAL",
+    "REWARD_CLOSER",
+    "PENALTY_FURTHER",
+    "PENALTY_STEP",
+    "REWARD_ROOM",
+    "REWARD_TURN",
+    "SimpleObs",
 ]
