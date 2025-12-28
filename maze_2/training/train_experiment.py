@@ -30,26 +30,55 @@ from environments import (
 
 
 class FlattenObservation(gym.ObservationWrapper):
-    """
-    Simple observation wrapper - just position and direction.
-    Much easier to learn than full grid.
-    """
+    """Simple observation with key support."""
 
     def __init__(self, env):
         super().__init__(env)
-        self.observation_space = spaces.Box(0, 20, (5,), np.float32)
+        self.observation_space = spaces.Box(0, 20, (12,), np.float32)
 
     def observation(self, obs):
         base_env = self.env
         while hasattr(base_env, "env"):
             base_env = base_env.env
+
+        agent_y, agent_x = base_env.agent_pos
+        goal_y, goal_x = base_env.goal_pos
+        direction = base_env.agent_dir
+
+        has_key = 1.0 if base_env.carrying is not None else 0.0
+
+        key_y, key_x = -1.0, -1.0
+        on_key = 0.0
+        if hasattr(base_env, "key_positions") and base_env.key_positions:
+            if base_env.carrying is None:
+                key_pos = list(base_env.key_positions.keys())[0]
+                key_y, key_x = float(key_pos[0]), float(key_pos[1])
+                if agent_y == key_pos[0] and agent_x == key_pos[1]:
+                    on_key = 1.0
+
+        door_y, door_x = -1.0, -1.0
+        on_door = 0.0
+        if hasattr(base_env, "door_positions") and base_env.door_positions:
+            door_pos = list(base_env.door_positions.keys())[0]
+            door_y, door_x = float(door_pos[0]), float(door_pos[1])
+            dist_to_door = abs(agent_y - door_pos[0]) + abs(agent_x - door_pos[1])
+            if dist_to_door <= 1:
+                on_door = 1.0
+
         return np.array(
             [
-                base_env.agent_pos[0],
-                base_env.agent_pos[1],
-                base_env.goal_pos[0],
-                base_env.goal_pos[1],
-                base_env.agent_dir,
+                agent_y,
+                agent_x,
+                goal_y,
+                goal_x,
+                direction,
+                has_key,
+                key_y,
+                key_x,
+                door_y,
+                door_x,
+                on_key,
+                on_door,
             ],
             dtype=np.float32,
         )
