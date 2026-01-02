@@ -1,0 +1,7 @@
+Environment: E3
+Reward: simple
+Algorithm: PPO
+Observation: full_map
+Total steps: 3000000
+Seed: 42
+Timestamp: 20260101_192743

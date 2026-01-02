@@ -216,7 +216,7 @@ def train(
             batch_size=64,
             n_epochs=10,
             gamma=0.99,
-            ent_coef=0.01,  # Entropy for exploration
+            ent_coef=0.1,  # Entropy for exploration
             tensorboard_log=tb_log_dir,
             seed=seed,
         )

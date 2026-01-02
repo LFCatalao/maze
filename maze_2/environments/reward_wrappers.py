@@ -12,13 +12,13 @@ import numpy as np
 # HYPERPARAMETERS (adjust these for experiments)
 # =============================================================================
 
-REWARD_GOAL = 100.0  # Reward for reaching the goal
-REWARD_CLOSER = 1.0  # Reward for getting closer to target
-PENALTY_FURTHER = -0.5  # Penalty for moving away from target
-PENALTY_STEP = -0.1  # Penalty per step (encourages efficiency)
-REWARD_ROOM = 10.0  # Reward for entering goal room
-REWARD_TURN = 0.5  # Reward for turning toward target
-REWARD_KEY_PICKUP = 20.0  # Reward for picking up key
+REWARD_GOAL = 100.0
+REWARD_CLOSER = 1.0
+PENALTY_FURTHER = -0.5
+PENALTY_STEP = -0.1
+REWARD_TURN = 0.5
+REWARD_KEY_PICKUP = 20.0
+REWARD_DOOR_OPEN = 20.0
 
 
 # =============================================================================
@@ -140,25 +140,29 @@ class SimpleObs(gym.ObservationWrapper):
 
 class SimpleRewardWrapper(gym.RewardWrapper):
     """
-    Two-phase reward:
-    - Phase 1: Get the key (only key matters)
-    - Phase 2: Get to goal (only goal matters)
+    Three-phase reward: key -> door -> goal
+    All bonuses are one-time only to prevent exploitation.
     """
 
     def __init__(self, env):
         super().__init__(env)
         self.previous_distance = None
-        self.can_get_turn_bonus = True
+        # One-time bonus flags
+        self.gave_pickup_hint = False
+        self.gave_door_hint = False
+        self.gave_turn_bonus = False
+        # Repeat action tracking
+        self.last_action = None
+        self.repeat_count = 0
 
     def _get_base_env(self):
-        """Get the unwrapped base environment."""
         base_env = self.env
         while hasattr(base_env, "env"):
             base_env = base_env.env
         return base_env
 
     def _get_current_target(self):
-        """Return current target position based on phase."""
+        """Return current target: key -> door -> goal."""
         base_env = self._get_base_env()
 
         # Phase 1: No key yet -> target is key
@@ -169,34 +173,53 @@ class SimpleRewardWrapper(gym.RewardWrapper):
         ):
             return list(base_env.key_positions.keys())[0]
 
-        # Phase 2: Have key -> target is goal
+        # Phase 2: Have key, door locked -> target is door
+        if hasattr(base_env, "door_positions") and base_env.door_positions:
+            door_pos = list(base_env.door_positions.keys())[0]
+            door_state = base_env.grid[door_pos[0], door_pos[1], 2]
+            if door_state == 2:  # Locked
+                return door_pos
+
+        # Phase 3: Door open -> target is goal
         return base_env.goal_pos
 
     def _distance_to_target(self):
-        """Distance to current target."""
+        """Distance to nearest adjacent cell of current target."""
         base_env = self._get_base_env()
         pos = base_env.agent_pos
+        target = self._get_current_target()
 
-        # Phase 1: Need key - go to adjacent cell
+        # For key and door, we need to be adjacent
+        # For goal, we step on it directly
         if (
             base_env.carrying is None
             and hasattr(base_env, "key_positions")
             and base_env.key_positions
         ):
-            key_pos = list(base_env.key_positions.keys())[0]
-            # Distance to nearest adjacent cell (not the key itself)
-            # Adjacent cells: (key_y-1, key_x), (key_y+1, key_x), (key_y, key_x-1), (key_y, key_x+1)
+            # Key phase - distance to adjacent cell
             distances = [
-                abs(pos[0] - (key_pos[0] - 1)) + abs(pos[1] - key_pos[1]),  # above key
-                abs(pos[0] - (key_pos[0] + 1)) + abs(pos[1] - key_pos[1]),  # below key
-                abs(pos[0] - key_pos[0]) + abs(pos[1] - (key_pos[1] - 1)),  # left of key
-                abs(pos[0] - key_pos[0]) + abs(pos[1] - (key_pos[1] + 1)),  # right of key
+                abs(pos[0] - (target[0] - 1)) + abs(pos[1] - target[1]),
+                abs(pos[0] - (target[0] + 1)) + abs(pos[1] - target[1]),
+                abs(pos[0] - target[0]) + abs(pos[1] - (target[1] - 1)),
+                abs(pos[0] - target[0]) + abs(pos[1] - (target[1] + 1)),
             ]
             return min(distances)
 
-        # Phase 2: Have key - go to goal
-        goal = base_env.goal_pos
-        return abs(pos[0] - goal[0]) + abs(pos[1] - goal[1])
+        # Door phase - also need adjacent
+        if hasattr(base_env, "door_positions") and base_env.door_positions:
+            door_pos = list(base_env.door_positions.keys())[0]
+            door_state = base_env.grid[door_pos[0], door_pos[1], 2]
+            if door_state == 2:  # Still locked
+                distances = [
+                    abs(pos[0] - (target[0] - 1)) + abs(pos[1] - target[1]),
+                    abs(pos[0] - (target[0] + 1)) + abs(pos[1] - target[1]),
+                    abs(pos[0] - target[0]) + abs(pos[1] - (target[1] - 1)),
+                    abs(pos[0] - target[0]) + abs(pos[1] - (target[1] + 1)),
+                ]
+                return min(distances)
+
+        # Goal phase - direct distance
+        return abs(pos[0] - target[0]) + abs(pos[1] - target[1])
 
     def _facing_target(self):
         """Check if facing toward current target."""
@@ -209,25 +232,36 @@ class SimpleRewardWrapper(gym.RewardWrapper):
         dx = target[1] - pos[1]
 
         if direction == 0 and dx > 0:
-            return True  # facing right, target right
-        if direction == 2 and dx < 0:
-            return True  # facing left, target left
-        if direction == 3 and dy < 0:
-            return True  # facing up, target up
+            return True  # facing right, target is right
         if direction == 1 and dy > 0:
-            return True  # facing down, target down
+            return True  # facing down, target is down
+        if direction == 2 and dx < 0:
+            return True  # facing left, target is left
+        if direction == 3 and dy < 0:
+            return True  # facing up, target is up
         return False
 
     def reset(self, **kwargs):
         obs, info = self.env.reset(**kwargs)
         self.previous_distance = self._distance_to_target()
-        self.can_get_turn_bonus = True
+        # Reset all flags
+        self.gave_pickup_hint = False
+        self.gave_door_hint = False
+        self.gave_turn_bonus = False
+        self.last_action = None
+        self.repeat_count = 0
         return obs, info
 
     def step(self, action):
         old_pos = tuple(self.env.agent_pos)
         base_env = self._get_base_env()
         had_key_before = base_env.carrying is not None
+
+        # Check door state before
+        door_open_before = False
+        if hasattr(base_env, "door_positions") and base_env.door_positions:
+            door_pos = list(base_env.door_positions.keys())[0]
+            door_open_before = base_env.grid[door_pos[0], door_pos[1], 2] == 0
 
         obs, base_reward, terminated, truncated, info = self.env.step(action)
 
@@ -239,15 +273,26 @@ class SimpleRewardWrapper(gym.RewardWrapper):
         if base_reward > 0:
             return obs, REWARD_GOAL, terminated, truncated, info
 
-        reward = 0.0
+        reward = PENALTY_STEP  # Always -0.1
 
-        # 1. Key pickup - BIG reward and reset distance tracking
+        # Key pickup bonus
         if has_key_now and not had_key_before:
             reward += REWARD_KEY_PICKUP
-            self.previous_distance = self._distance_to_target()  # Now tracking goal
-            return obs, reward + PENALTY_STEP, terminated, truncated, info
+            self.previous_distance = self._distance_to_target()
+            self.gave_turn_bonus = False  # Reset for door phase
+            return obs, reward, terminated, truncated, info
 
-        # 2. Distance to current target (key or goal)
+        # Door open bonus
+        if hasattr(base_env, "door_positions") and base_env.door_positions:
+            door_pos = list(base_env.door_positions.keys())[0]
+            door_open_now = base_env.grid[door_pos[0], door_pos[1], 2] == 0
+            if door_open_now and not door_open_before:
+                reward += REWARD_DOOR_OPEN
+                self.previous_distance = self._distance_to_target()
+                self.gave_turn_bonus = False  # Reset for goal phase
+                return obs, reward, terminated, truncated, info
+
+        # Distance reward
         current_distance = self._distance_to_target()
         if current_distance < self.previous_distance:
             reward += REWARD_CLOSER
@@ -255,38 +300,82 @@ class SimpleRewardWrapper(gym.RewardWrapper):
             reward += PENALTY_FURTHER
         self.previous_distance = current_distance
 
-        # 3. Turn bonus
-        if action in [0, 1] and self.can_get_turn_bonus:
+        # One-time turn bonus when facing target
+        if action in [0, 1] and not self.gave_turn_bonus:
             if self._facing_target():
                 reward += REWARD_TURN
-                self.can_get_turn_bonus = False
+                self.gave_turn_bonus = True
 
-        if moved:
-            self.can_get_turn_bonus = True
+        # One-time hint when can pickup key
+        if not has_key_now and not self.gave_pickup_hint:
+            # Check can_pickup from observation (index 10)
+            flat_obs = self._get_flat_obs()
+            if flat_obs is not None and flat_obs[10] == 1.0:
+                reward += 2.0
+                self.gave_pickup_hint = True
 
-        # 4. Hint for being in position to pickup key
-        if not has_key_now and hasattr(base_env, "key_positions") and base_env.key_positions:
-            key_pos = list(base_env.key_positions.keys())[0]
-            direction = base_env.agent_dir
+        # One-time hint when can open door
+        if has_key_now and not self.gave_door_hint:
+            flat_obs = self._get_flat_obs()
+            if flat_obs is not None and flat_obs[11] == 1.0:
+                reward += 2.0
+                self.gave_door_hint = True
 
-            # Check if can pickup (adjacent and facing)
-            can_pickup = False
-            if direction == 0 and new_pos[0] == key_pos[0] and new_pos[1] == key_pos[1] - 1:
-                can_pickup = True
-            elif direction == 1 and new_pos[0] == key_pos[0] - 1 and new_pos[1] == key_pos[1]:
-                can_pickup = True
-            elif direction == 2 and new_pos[0] == key_pos[0] and new_pos[1] == key_pos[1] + 1:
-                can_pickup = True
-            elif direction == 3 and new_pos[0] == key_pos[0] + 1 and new_pos[1] == key_pos[1]:
-                can_pickup = True
-
-            if can_pickup:
-                reward += 2.0  # Strong hint: you can pickup now!
-
-        # 5. Step penalty
-        reward += PENALTY_STEP
+        # Penalty for repeating non-moving actions
+        if action == self.last_action and not moved:
+            self.repeat_count += 1
+            if self.repeat_count > 3:
+                reward -= 0.2
+        else:
+            self.repeat_count = 0
+        self.last_action = action
 
         return obs, reward, terminated, truncated, info
+
+    def _get_flat_obs(self):
+        """Get the flattened observation to check can_pickup/can_open."""
+        base_env = self._get_base_env()
+        agent_pos = base_env.agent_pos
+        direction = base_env.agent_dir
+
+        # Check can_pickup
+        can_pickup = 0.0
+        if (
+            hasattr(base_env, "key_positions")
+            and base_env.key_positions
+            and base_env.carrying is None
+        ):
+            key_pos = list(base_env.key_positions.keys())[0]
+            if direction == 0 and agent_pos[0] == key_pos[0] and agent_pos[1] == key_pos[1] - 1:
+                can_pickup = 1.0
+            elif direction == 1 and agent_pos[0] == key_pos[0] - 1 and agent_pos[1] == key_pos[1]:
+                can_pickup = 1.0
+            elif direction == 2 and agent_pos[0] == key_pos[0] and agent_pos[1] == key_pos[1] + 1:
+                can_pickup = 1.0
+            elif direction == 3 and agent_pos[0] == key_pos[0] + 1 and agent_pos[1] == key_pos[1]:
+                can_pickup = 1.0
+
+        # Check can_open
+        can_open = 0.0
+        if hasattr(base_env, "door_positions") and base_env.door_positions:
+            door_pos = list(base_env.door_positions.keys())[0]
+            if direction == 0 and agent_pos[0] == door_pos[0] and agent_pos[1] == door_pos[1] - 1:
+                can_open = 1.0
+            elif (
+                direction == 1 and agent_pos[0] == door_pos[0] - 1 and agent_pos[1] == door_pos[1]
+            ):
+                can_open = 1.0
+            elif (
+                direction == 2 and agent_pos[0] == door_pos[0] and agent_pos[1] == door_pos[1] + 1
+            ):
+                can_open = 1.0
+            elif (
+                direction == 3 and agent_pos[0] == door_pos[0] + 1 and agent_pos[1] == door_pos[1]
+            ):
+                can_open = 1.0
+
+        # Return as array with indices 10 and 11
+        return [0] * 10 + [can_pickup, can_open]
 
     def reward(self, reward):
         return reward
