@@ -15,43 +15,38 @@ from .configs import (
 )
 from .reward_wrappers import (
     SimpleRewardWrapper,
+    SimpleObs,
     apply_reward_wrapper,
     REWARD_WRAPPERS,
     REWARD_GOAL,
     REWARD_CLOSER,
     PENALTY_FURTHER,
     PENALTY_STEP,
-    REWARD_ROOM,
     REWARD_TURN,
-    SimpleObs,
+    REWARD_KEY_PICKUP,
+    # REWARD_DOOR_OPEN,
+    # REWARD_CAN_INTERACT,
 )
 
 __all__ = [
     # Environment
     "LockedRoomEnv",
-    "Objects",
-    "Colors",
-    "Actions",
-    "COLOR_NAMES",
-    "COLOR_MAP",
     # Configs
     "EnvConfig",
-    "E1_FIXED_SIMPLE",
-    "E2_RANDOM_EXIT",
-    "E3_ONE_DOOR",
-    "E4_MULTI_DOOR",
     "get_config",
     "list_configs",
     "ALL_ENV_CONFIGS",
-    # Rewards
+    # Reward wrappers
     "SimpleRewardWrapper",
+    "SimpleObs",
     "apply_reward_wrapper",
     "REWARD_WRAPPERS",
     "REWARD_GOAL",
     "REWARD_CLOSER",
     "PENALTY_FURTHER",
     "PENALTY_STEP",
-    "REWARD_ROOM",
     "REWARD_TURN",
-    "SimpleObs",
+    "REWARD_KEY_PICKUP",
+    # "REWARD_DOOR_OPEN",
+    # "REWARD_CAN_INTERACT",
 ]

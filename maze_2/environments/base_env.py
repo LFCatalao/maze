@@ -212,12 +212,12 @@ class LockedRoomEnv(gym.Env):
 
         # Define door positions (openings in walls)
         self.all_door_positions = [
-            (15, 7, Colors.YELLOW),
-            (9, 7, Colors.GREEN),
-            (3, 7, Colors.BLUE),
-            (15, 11, Colors.PURPLE),
-            (9, 11, Colors.GREY),
-            (3, 11, Colors.RED),
+            (3, 7, Colors.YELLOW),  # Top-left room
+            (9, 7, Colors.GREEN),  # Middle-left room
+            (15, 7, Colors.BLUE),  # Bottom-left room
+            (3, 11, Colors.PURPLE),  # Top-right room
+            (9, 11, Colors.GREY),  # Middle-right room
+            (15, 11, Colors.RED),  # Bottom-right room
         ]
 
         # Create openings at all door positions
@@ -460,22 +460,25 @@ class LockedRoomEnv(gym.Env):
         dir_vec = [(0, 1), (1, 0), (0, -1), (-1, 0)]
         dy, dx = dir_vec[self.agent_dir]
         front_y, front_x = self.agent_pos[0] + dy, self.agent_pos[1] + dx
-
         if not (0 <= front_y < self.size and 0 <= front_x < self.size):
             return
-
         if self.grid[front_y, front_x, 0] == Objects.DOOR:
             state = self.grid[front_y, front_x, 2]
             color = self.grid[front_y, front_x, 1]
-
             if state == 2:  # Locked
                 if self.carrying == color:
                     self.grid[front_y, front_x, 2] = 0
+                    # UPDATE door_positions too!
+                    if (front_y, front_x) in self.door_positions:
+                        self.door_positions[(front_y, front_x)] = (color, 0)
                     self.carrying = None
                     if self.verbose:
                         print(f"Unlocked {COLOR_NAMES.get(color, 'unknown')} door!")
             elif state == 1:  # Closed
                 self.grid[front_y, front_x, 2] = 0
+                # UPDATE door_positions too!
+                if (front_y, front_x) in self.door_positions:
+                    self.door_positions[(front_y, front_x)] = (color, 0)
                 if self.verbose:
                     print("Opened door!")
 
