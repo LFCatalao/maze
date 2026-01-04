@@ -7,3 +7,5 @@ logs/
 # Ignore maze logs and models
 maze/logs/
 maze/models/
+
+results/

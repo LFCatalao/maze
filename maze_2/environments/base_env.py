@@ -111,6 +111,9 @@ class LockedRoomEnv(gym.Env):
         randomize_doors: bool = False,
         include_key: bool = False,
         locked_door: bool = False,
+        defined_doors: Optional[List[Dict]] = None,
+        goal_in_locked_room: bool = False,
+        enable_key_chain: bool = False,
         # Training options
         verbose: bool = False,
     ):
@@ -129,6 +132,9 @@ class LockedRoomEnv(gym.Env):
             randomize_doors: Whether to randomize door positions
             include_key: Whether to include a key
             locked_door: Whether one door should be locked
+            defined_doors: List of dicts {'pos': (y,x), 'color': int, 'key_pos': (y,x)|None}
+            goal_in_locked_room: If True, random goal is placed in a room behind a locked door
+            enable_key_chain: If True, generates a dependency chain of keys and doors
             verbose: Print action feedback (for debugging)
         """
         super().__init__()
@@ -144,7 +150,12 @@ class LockedRoomEnv(gym.Env):
         self.randomize_doors = randomize_doors
         self.include_key = include_key
         self.locked_door = locked_door
+        self.defined_doors = defined_doors
+        self.goal_in_locked_room = goal_in_locked_room
+        self.enable_key_chain = enable_key_chain
         self.verbose = verbose
+        
+        self.key_chain_plan = None
 
         # Action space: 5 discrete actions
         self.action_space = spaces.Discrete(5)
@@ -196,6 +207,64 @@ class LockedRoomEnv(gym.Env):
                     valid.append((y, x))
         return valid
 
+    def _get_room_index(self, y: int, x: int) -> int:
+        """
+        Get room index for a given position.
+        Rooms:
+        0: Top-Left, 1: Mid-Left, 2: Bot-Left
+        3: Top-Right, 4: Mid-Right, 5: Bot-Right
+        -1: Corridor or Wall
+        """
+        if not (1 <= y < self.size - 1 and 1 <= x < self.size - 1):
+            return -1
+        
+        # Corridor check (x=7, 11 are walls, 8-10 is corridor)
+        if 7 <= x <= 11:
+            return -1
+            
+        # Left side
+        if x < 7:
+            if y <= 5: return 0
+            if y <= 11: return 1
+            return 2
+        
+        # Right side
+        if x > 11:
+            if y <= 5: return 3
+            if y <= 11: return 4
+            return 5
+            
+        return -1
+
+    def _get_random_pos_in_room(self, room_idx: int) -> Optional[Tuple[int, int]]:
+        """Get a random empty position in the specified room"""
+        # Define room bounds (y_start, y_end, x_start, x_end) inclusive
+        bounds = {
+            0: (1, 5, 1, 6),
+            1: (7, 11, 1, 6),
+            2: (13, 17, 1, 6),
+            3: (1, 5, 12, 17),
+            4: (7, 11, 12, 17),
+            5: (13, 17, 12, 17)
+        }
+        
+        if room_idx not in bounds:
+            return None
+            
+        y1, y2, x1, x2 = bounds[room_idx]
+        
+        # Find all empty spots in this room
+        valid = []
+        for y in range(y1, y2 + 1):
+            for x in range(x1, x2 + 1):
+                if self.grid[y, x, 0] == Objects.EMPTY:
+                    valid.append((y, x))
+                    
+        if not valid:
+            return None
+            
+        return valid[np.random.randint(len(valid))]
+
     def _generate_grid(self):
         """Generate the grid layout with walls and door openings"""
         # Initialize empty grid
@@ -237,7 +306,91 @@ class LockedRoomEnv(gym.Env):
     def _place_doors(self):
         """Place doors according to configuration"""
         self.door_positions = {}
-        self.locked_door_color = None
+        self.keys_to_place = []  # List of (color, fixed_pos_or_None)
+
+        if self.defined_doors is not None:
+            # Use explicit configuration based on predefined door indices
+            for door_conf in self.defined_doors:
+                idx = door_conf.get('door_idx')
+                
+                if idx is None or not (0 <= idx < len(self.all_door_positions)):
+                    if self.verbose:
+                        print(f"Warning: Invalid door index {idx}. Must be 0-5.")
+                    continue
+
+                # Get predefined position and default color
+                y, x, default_color = self.all_door_positions[idx]
+                
+                # Allow color override, otherwise use default
+                color = door_conf.get('color', default_color)
+                key_pos = door_conf.get('key_pos')
+                
+                # Place locked door
+                self.grid[y, x, 0] = Objects.DOOR
+                self.grid[y, x, 1] = color
+                self.grid[y, x, 2] = 2  # Always locked
+                self.door_positions[(y, x)] = (color, 2)
+                
+                # Add to keys to place
+                self.keys_to_place.append((color, key_pos))
+            return
+
+        if self.enable_key_chain and self.num_doors > 0:
+            # Generate key chain logic
+            all_indices = list(range(len(self.all_door_positions)))
+            # Ensure we have enough rooms for the chain + 1 open room
+            if self.num_doors > len(all_indices) - 1:
+                 # Fallback if too many doors requested
+                 selected_indices = np.random.choice(all_indices, self.num_doors, replace=False)
+            else:
+                 selected_indices = np.random.choice(all_indices, self.num_doors, replace=False)
+            
+            open_indices = [i for i in all_indices if i not in selected_indices]
+            
+            # Shuffle selected indices to form a chain
+            chain_indices = list(selected_indices)
+            np.random.shuffle(chain_indices)
+            
+            # Start room (where the first key is) - must be an open room
+            if open_indices:
+                start_room_idx = np.random.choice(open_indices)
+            else:
+                start_room_idx = -1 # Corridor or fallback
+            
+            # Plan:
+            # Key for chain_indices[0] -> in start_room_idx
+            # Key for chain_indices[1] -> in chain_indices[0]
+            # ...
+            # Key for chain_indices[i] -> in chain_indices[i-1]
+            # Goal -> in chain_indices[-1]
+            
+            self.key_chain_plan = {
+                'goal_room': chain_indices[-1],
+                'key_placements': []
+            }
+            
+            # Place doors
+            for idx in selected_indices:
+                y, x, color = self.all_door_positions[idx]
+                self.grid[y, x, 0] = Objects.DOOR
+                self.grid[y, x, 1] = color
+                self.grid[y, x, 2] = 2 # Locked
+                self.door_positions[(y, x)] = (color, 2)
+                
+            # Define key placements
+            # First key (opens first door in chain)
+            first_door_idx = chain_indices[0]
+            first_door_color = self.all_door_positions[first_door_idx][2]
+            self.key_chain_plan['key_placements'].append((first_door_color, start_room_idx))
+            
+            # Subsequent keys
+            for i in range(1, len(chain_indices)):
+                target_door_idx = chain_indices[i]
+                target_door_color = self.all_door_positions[target_door_idx][2]
+                prev_room_idx = chain_indices[i-1]
+                self.key_chain_plan['key_placements'].append((target_door_color, prev_room_idx))
+                
+            return
 
         if self.num_doors == 0:
             return
@@ -263,6 +416,7 @@ class LockedRoomEnv(gym.Env):
         lock_idx = 0
         if self.locked_door and len(selected) > 0:
             self.locked_door_color = selected[lock_idx][2]
+            self.keys_to_place.append((self.locked_door_color, None))
 
         for i, (y, x, color) in enumerate(selected):
             state = 2 if (self.locked_door and i == lock_idx) else 1
@@ -297,6 +451,115 @@ class LockedRoomEnv(gym.Env):
         """Place key in accessible area (not behind any locked door)."""
         self.key_positions = {}
 
+        if self.enable_key_chain and self.key_chain_plan:
+            for color, room_idx in self.key_chain_plan['key_placements']:
+                if room_idx == -1:
+                    # Place in corridor
+                    valid = self._get_valid_empty_positions()
+                    corridor = [p for p in valid if 8 <= p[1] <= 10]
+                    if corridor:
+                        pos = corridor[np.random.randint(len(corridor))]
+                    else:
+                        pos = valid[np.random.randint(len(valid))]
+                else:
+                    pos = self._get_random_pos_in_room(room_idx)
+                
+                if pos:
+                    self.grid[pos[0], pos[1], 0] = Objects.KEY
+                    self.grid[pos[0], pos[1], 1] = color
+                    self.key_positions[pos] = color
+            return
+
+        # Case 1: Robust placement (defined doors or legacy locked door)
+        if self.keys_to_place:
+            # Separate fixed and random keys
+            fixed_keys = []
+            random_keys = []
+            for color, pos in self.keys_to_place:
+                if pos is not None:
+                    fixed_keys.append((color, pos))
+                else:
+                    random_keys.append(color)
+
+            # Place fixed keys
+            for color, pos in fixed_keys:
+                self.grid[pos[0], pos[1], 0] = Objects.KEY
+                self.grid[pos[0], pos[1], 1] = color
+                self.key_positions[pos] = color
+
+            if not random_keys:
+                return
+
+            # Identify available rooms
+            available_rooms = set(range(6))
+            
+            # Remove goal room
+            if self.goal_pos:
+                goal_room = self._get_room_index(self.goal_pos[0], self.goal_pos[1])
+                if goal_room in available_rooms:
+                    available_rooms.remove(goal_room)
+                
+            # Remove rooms with fixed keys
+            for _, pos in fixed_keys:
+                r = self._get_room_index(pos[0], pos[1])
+                if r in available_rooms:
+                    available_rooms.remove(r)
+
+            # Identify rooms without doors
+            # Door positions mapping to rooms:
+            # (3, 7) -> Room 0, (9, 7) -> Room 1, (15, 7) -> Room 2
+            # (3, 11) -> Room 3, (9, 11) -> Room 4, (15, 11) -> Room 5
+            door_map = {
+                (3, 7): 0, (9, 7): 1, (15, 7): 2,
+                (3, 11): 3, (9, 11): 4, (15, 11): 5
+            }
+            rooms_with_doors = set()
+            for pos, room_idx in door_map.items():
+                # Check if there is a door object at this position
+                if self.grid[pos[0], pos[1], 0] == Objects.DOOR:
+                    rooms_with_doors.add(room_idx)
+            
+            rooms_without_doors = available_rooms - rooms_with_doors
+            
+            # Constraint: One key in a room without a door
+            # We need to pick one key to satisfy this, if possible
+            keys_remaining = list(random_keys)
+            
+            if rooms_without_doors and keys_remaining:
+                # Pick a room without a door
+                room_idx = np.random.choice(list(rooms_without_doors))
+                # Pick a key
+                key_color = keys_remaining.pop(0)
+                
+                # Place key
+                pos = self._get_random_pos_in_room(room_idx)
+                if pos:
+                    self.grid[pos[0], pos[1], 0] = Objects.KEY
+                    self.grid[pos[0], pos[1], 1] = key_color
+                    self.key_positions[pos] = key_color
+                    available_rooms.remove(room_idx)
+            
+            # Place remaining keys in remaining available rooms
+            # Shuffle available rooms
+            avail_list = list(available_rooms)
+            np.random.shuffle(avail_list)
+            
+            for key_color in keys_remaining:
+                if not avail_list:
+                    if self.verbose:
+                        print(f"Warning: Not enough rooms to place key {COLOR_NAMES.get(key_color)}")
+                    continue
+                    
+                room_idx = avail_list.pop(0)
+                pos = self._get_random_pos_in_room(room_idx)
+                if pos:
+                    self.grid[pos[0], pos[1], 0] = Objects.KEY
+                    self.grid[pos[0], pos[1], 1] = key_color
+                    self.key_positions[pos] = key_color
+            
+            return
+
+        # Case 2: Legacy configuration
         if not self.include_key:
             return
 
@@ -325,6 +588,43 @@ class LockedRoomEnv(gym.Env):
         """Place goal at fixed or random position"""
         if self.fixed_goal_pos is not None:
             goal_y, goal_x = self.fixed_goal_pos
+        elif self.enable_key_chain and self.key_chain_plan:
+            room_idx = self.key_chain_plan['goal_room']
+            pos = self._get_random_pos_in_room(room_idx)
+            if pos:
+                goal_y, goal_x = pos
+            else:
+                # Fallback
+                goal_y, goal_x = (3, 3)
+        elif self.goal_in_locked_room:
+            # Find rooms behind locked doors
+            locked_rooms = []
+            
+            # Map door positions to room indices
+            # (3, 7) -> Room 0, (9, 7) -> Room 1, (15, 7) -> Room 2
+            # (3, 11) -> Room 3, (9, 11) -> Room 4, (15, 11) -> Room 5
+            door_to_room = {
+                (3, 7): 0, (9, 7): 1, (15, 7): 2,
+                (3, 11): 3, (9, 11): 4, (15, 11): 5
+            }
+            
+            for pos, (color, state) in self.door_positions.items():
+                if state == 2: # Locked
+                    if pos in door_to_room:
+                        locked_rooms.append(door_to_room[pos])
+            
+            if locked_rooms:
+                room_idx = locked_rooms[np.random.randint(len(locked_rooms))]
+                pos = self._get_random_pos_in_room(room_idx)
+                if pos:
+                    goal_y, goal_x = pos
+                else:
+                    goal_y, goal_x = 3, 3 # Fallback
+            else:
+                # Fallback if no locked doors found
+                if self.verbose:
+                    print("Warning: goal_in_locked_room=True but no locked doors found.")
+                goal_y, goal_x = 3, 3
         else:
             # Random position in one of the 6 rooms (not corridor)
             valid_positions = [
@@ -376,11 +676,12 @@ class LockedRoomEnv(gym.Env):
 
         # Generate environment - ORDER MATTERS
         self._generate_grid()
-        self._place_goal()  # Goal first (needed for door placement)
-        self._place_doors()  # Door at goal's room entrance
-        self._place_key()  # Key in accessible area
-        self._place_agent()  # Agent last (avoids goal room if locked)
+        self._place_doors()
+        self._place_goal()  # Place goal before keys to respect constraints
+        self._place_key()
+        self._place_agent()
 
+        # Generate mission string
         self._generate_mission()
 
         return self._get_obs(), self._get_info()

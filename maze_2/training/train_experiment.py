@@ -104,6 +104,9 @@ def create_env(env_id: str, reward_id: str, obs_mode: str, render_mode: Optional
         randomize_doors=config.randomize_doors,
         include_key=config.include_key,
         locked_door=config.locked_door,
+        defined_doors=config.defined_doors,
+        goal_in_locked_room=config.goal_in_locked_room,
+        enable_key_chain=config.enable_key_chain,
         verbose=False,
     )
 
@@ -115,7 +118,7 @@ def create_env(env_id: str, reward_id: str, obs_mode: str, render_mode: Optional
 
 def train(
     env_id: str = "E1",
-    reward_id: str = "R2",
+    reward_id: str = "simple",
     algo: str = "PPO",
     obs_mode: str = "full_map",
     total_timesteps: int = 100_000,
@@ -163,6 +166,11 @@ def train(
             from stable_baselines3 import DQN as Algorithm
         elif algo == "A2C":
             from stable_baselines3 import A2C as Algorithm
+        elif algo == "SARSA":
+            try:
+                from training.simple_sarsa import SimpleSARSA as Algorithm
+            except ImportError:
+                from simple_sarsa import SimpleSARSA as Algorithm
         elif algo == "SAC":
             # SAC requires continuous action space - skip for now
             print("ERROR: SAC requires continuous actions. Use PPO, DQN, or A2C.")
@@ -188,10 +196,12 @@ def train(
     # Create environment
     from stable_baselines3.common.vec_env import DummyVecEnv
     from stable_baselines3.common.callbacks import CheckpointCallback
+    from stable_baselines3.common.monitor import Monitor
 
     def make_env():
         env = create_env(env_id, reward_id, obs_mode, render_mode=None)
         env = FlattenObservation(env)
+        env = Monitor(env, os.path.join(model_dir, "monitor"))
         return env
 
     env = DummyVecEnv([make_env])
@@ -252,6 +262,18 @@ def train(
             n_steps=5,
             gamma=0.99,
             ent_coef=0.01,
+            tensorboard_log=tb_log_dir,
+            seed=seed,
+        )
+    elif algo == "SARSA":
+        model = Algorithm(
+            "MlpPolicy",
+            env,
+            verbose=1,
+            learning_rate=1e-4,
+            gamma=0.99,
+            exploration_fraction=0.2,
+            exploration_final_eps=0.05,
             tensorboard_log=tb_log_dir,
             seed=seed,
         )
@@ -337,7 +359,7 @@ Examples:
     parser.add_argument(
         "--reward",
         type=str,
-        default="R2",
+        default="simple",
         choices=list(REWARD_WRAPPERS.keys()),
         help="Reward strategy",
     )

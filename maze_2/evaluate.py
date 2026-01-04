@@ -101,6 +101,9 @@ def create_env(env_id: str, reward_id: str, obs_mode: str, render: bool = True):
         randomize_doors=config.randomize_doors,
         include_key=config.include_key,
         locked_door=config.locked_door,
+        defined_doors=config.defined_doors,
+        goal_in_locked_room=config.goal_in_locked_room,
+        enable_key_chain=config.enable_key_chain,
         verbose=True,  # Show action feedback
     )
 
