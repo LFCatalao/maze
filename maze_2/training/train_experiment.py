@@ -19,6 +19,8 @@ from gymnasium import spaces
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from training.callbacks import MetricsCallback
+
 from environments import (
     LockedRoomEnv,
     get_config,
@@ -204,6 +206,12 @@ def train(
         save_path=model_dir,
         name_prefix=exp_name,
     )
+    metrics_callback = MetricsCallback(save_path=model_dir, verbose=1)
+
+    # Combine callbacks
+    from stable_baselines3.common.callbacks import CallbackList
+
+    callbacks = CallbackList([checkpoint_callback, metrics_callback])
 
     # Create model with appropriate hyperparameters
     if algo == "PPO":
@@ -256,7 +264,7 @@ def train(
     try:
         model.learn(
             total_timesteps=total_timesteps,
-            callback=checkpoint_callback,
+            callback=callbacks,
             progress_bar=True,
         )
     except KeyboardInterrupt:

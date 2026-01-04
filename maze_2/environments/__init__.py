@@ -8,7 +8,7 @@ from .configs import (
     E1_FIXED_SIMPLE,
     E2_RANDOM_EXIT,
     E3_ONE_DOOR,
-    E4_MULTI_DOOR,
+    E4_RANDOM_AGENT_KEYDOOR,
     get_config,
     list_configs,
     ALL_ENV_CONFIGS,

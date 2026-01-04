@@ -76,15 +76,41 @@ E3_ONE_DOOR = EnvConfig(
 )
 
 # E4: Fixed positions, multiple doors
-E4_MULTI_DOOR = EnvConfig(
-    name="E4_multi_door",
-    description="Fixed positions with multiple locked doors",
-    fixed_agent_pos=(15, 9),  # Bottom of corridor
-    fixed_goal_pos=(3, 3),  # Top-left room
-    num_doors=4,
+E4_RANDOM_AGENT_KEYDOOR = EnvConfig(
+    name="E4_random_agent_keydoor",
+    description="Random agent, fixed goal, locked door",
+    fixed_agent_pos=None,
+    fixed_goal_pos=(3, 3),
+    num_doors=1,
     include_key=True,
     locked_door=True,
     randomize_doors=False,
+    max_steps=400,
+)
+
+# E5: Random agent position, fixed goal, one locked door
+E5_RANDOM_AGENT = EnvConfig(
+    name="E5_random_agent",
+    description="Random agent start, fixed goal, one locked door",
+    fixed_agent_pos=None,  # Random
+    fixed_goal_pos=(3, 3),
+    num_doors=1,
+    include_key=True,
+    locked_door=True,
+    randomize_doors=False,
+    max_steps=400,
+)
+
+# E6: Random agent AND random goal/door (same room)
+E6_FULLY_RANDOM = EnvConfig(
+    name="E6_fully_random",
+    description="Random agent, random goal with door in same room",
+    fixed_agent_pos=None,
+    fixed_goal_pos=None,  # Will trigger same-room logic
+    num_doors=1,
+    include_key=True,
+    locked_door=True,
+    randomize_doors=True,  # Door placed at entrance to goal's room
     max_steps=500,
 )
 
@@ -111,7 +137,9 @@ ALL_ENV_CONFIGS = {
     "E1": E1_FIXED_SIMPLE,
     "E2": E2_RANDOM_EXIT,
     "E3": E3_ONE_DOOR,
-    "E4": E4_MULTI_DOOR,
+    "E4": E4_RANDOM_AGENT_KEYDOOR,
+    "E5": E5_RANDOM_AGENT,
+    "E6": E6_FULLY_RANDOM,
 }
 
 

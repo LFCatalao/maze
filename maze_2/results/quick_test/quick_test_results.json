@@ -1,0 +1,44 @@
+{
+  "E1": {
+    "episodes": 264,
+    "mean_reward": 0.7954298257827759,
+    "mean_length": 189.36363636363637,
+    "success_rate": 0.08712121212121213,
+    "final_10_success": 0.1
+  },
+  "E2": {
+    "episodes": 167,
+    "mean_reward": -28.59527587890625,
+    "mean_length": 298.91616766467064,
+    "success_rate": 0.0,
+    "final_10_success": 0.0
+  },
+  "E3": {
+    "episodes": 125,
+    "mean_reward": -37.317562103271484,
+    "mean_length": 400.0,
+    "success_rate": 0.0,
+    "final_10_success": 0.0
+  },
+  "E4": {
+    "episodes": 125,
+    "mean_reward": -39.19997024536133,
+    "mean_length": 400.0,
+    "success_rate": 0.0,
+    "final_10_success": 0.0
+  },
+  "E5": {
+    "episodes": 125,
+    "mean_reward": -39.19997024536133,
+    "mean_length": 400.0,
+    "success_rate": 0.0,
+    "final_10_success": 0.0
+  },
+  "E6": {
+    "episodes": 100,
+    "mean_reward": -50.4768180847168,
+    "mean_length": 500.0,
+    "success_rate": 0.0,
+    "final_10_success": 0.0
+  }
+}

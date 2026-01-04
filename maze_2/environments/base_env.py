@@ -66,6 +66,16 @@ COLOR_NAMES = {
     Colors.GREY: "grey",
 }
 
+# Maps each room to its door position (y, x) and door color
+ROOM_DOOR_MAP = {
+    "left_top": (3, 7, Colors.YELLOW),
+    "left_middle": (9, 7, Colors.GREEN),
+    "left_bottom": (15, 7, Colors.BLUE),
+    "right_top": (3, 11, Colors.PURPLE),
+    "right_middle": (9, 11, Colors.GREY),
+    "right_bottom": (15, 11, Colors.RED),
+}
+
 
 class LockedRoomEnv(gym.Env):
     """
@@ -227,46 +237,85 @@ class LockedRoomEnv(gym.Env):
     def _place_doors(self):
         """Place doors according to configuration"""
         self.door_positions = {}
+        self.locked_door_color = None
 
         if self.num_doors == 0:
-            return  # All positions remain as openings
+            return
 
-        # Select which positions get doors
-        if self.randomize_doors:
-            indices = np.random.choice(len(self.all_door_positions), self.num_doors, replace=False)
-            selected = [self.all_door_positions[i] for i in indices]
-        else:
-            selected = self.all_door_positions[: self.num_doors]
+        if self.randomize_doors and self.goal_pos is not None:
+            # Place door at entrance to goal's room
+            goal_room = self._get_room(self.goal_pos)
 
-        # Determine which door to lock
+            if goal_room in ROOM_DOOR_MAP:
+                y, x, color = ROOM_DOOR_MAP[goal_room]
+                state = 2 if self.locked_door else 1  # 2=locked, 1=closed
+                self.grid[y, x, 0] = Objects.DOOR
+                self.grid[y, x, 1] = color
+                self.grid[y, x, 2] = state
+                self.door_positions[(y, x)] = (color, state)
+                if self.locked_door:
+                    self.locked_door_color = color
+            return
+
+        # Original logic for non-randomized doors
+        selected = self.all_door_positions[: self.num_doors]
+
         lock_idx = 0
         if self.locked_door and len(selected) > 0:
-            if self.randomize_doors:
-                lock_idx = np.random.randint(len(selected))
             self.locked_door_color = selected[lock_idx][2]
 
-        # Place doors
         for i, (y, x, color) in enumerate(selected):
-            state = 2 if (self.locked_door and i == lock_idx) else 1  # 2=locked, 1=closed
+            state = 2 if (self.locked_door and i == lock_idx) else 1
             self.grid[y, x, 0] = Objects.DOOR
             self.grid[y, x, 1] = color
             self.grid[y, x, 2] = state
             self.door_positions[(y, x)] = (color, state)
 
+    def _get_room(self, pos):
+        """Determine which room a position is in."""
+        y, x = pos
+
+        if 7 <= x <= 11:
+            return "corridor"
+
+        if x < 7:
+            if y < 6:
+                return "left_top"
+            elif y < 12:
+                return "left_middle"
+            else:
+                return "left_bottom"
+        else:  # x > 11
+            if y < 6:
+                return "right_top"
+            elif y < 12:
+                return "right_middle"
+            else:
+                return "right_bottom"
+
     def _place_key(self):
-        """Place key if configured"""
+        """Place key in accessible area (not behind any locked door)."""
         self.key_positions = {}
 
         if not self.include_key:
             return
 
-        # Place key in accessible area (right side rooms)
-        valid_key_positions = [
-            (y, x) for y, x in self._get_valid_empty_positions() if x > 11  # Right side of grid
-        ]
+        # Get rooms that are NOT blocked by locked doors
+        blocked_rooms = set()
+        if self.locked_door and self.goal_pos is not None:
+            goal_room = self._get_room(self.goal_pos)
+            blocked_rooms.add(goal_room)
+
+        # Valid key positions: corridor + unblocked rooms
+        valid_key_positions = []
+        for y, x in self._get_valid_empty_positions():
+            room = self._get_room((y, x))
+            if room == "corridor" or room not in blocked_rooms:
+                valid_key_positions.append((y, x))
 
         if valid_key_positions:
-            key_pos = valid_key_positions[np.random.randint(len(valid_key_positions))]
+            idx = np.random.randint(len(valid_key_positions))
+            key_pos = valid_key_positions[idx]
             key_color = self.locked_door_color if self.locked_door else Colors.BLUE
             self.grid[key_pos[0], key_pos[1], 0] = Objects.KEY
             self.grid[key_pos[0], key_pos[1], 1] = key_color
@@ -277,12 +326,15 @@ class LockedRoomEnv(gym.Env):
         if self.fixed_goal_pos is not None:
             goal_y, goal_x = self.fixed_goal_pos
         else:
-            # Random position in left rooms
+            # Random position in one of the 6 rooms (not corridor)
             valid_positions = [
-                (y, x) for y, x in self._get_valid_empty_positions() if x < 7  # Left side
+                (y, x)
+                for y, x in self._get_valid_empty_positions()
+                if self._get_room((y, x)) != "corridor"
             ]
             if valid_positions:
-                goal_y, goal_x = valid_positions[np.random.randint(len(valid_positions))]
+                idx = np.random.randint(len(valid_positions))
+                goal_y, goal_x = valid_positions[idx]
             else:
                 goal_y, goal_x = 3, 3  # Fallback
 
@@ -294,12 +346,26 @@ class LockedRoomEnv(gym.Env):
         if self.fixed_agent_pos is not None:
             agent_y, agent_x = self.fixed_agent_pos
         else:
-            # Random position in corridor
-            agent_x = np.random.randint(8, 11)
-            agent_y = np.random.randint(2, 17)
+            # Random position anywhere that's empty (excluding goal room if doors exist)
+            valid_positions = self._get_valid_empty_positions()
+
+            # If there's a locked door, don't spawn agent in the goal's room
+            if self.locked_door and self.goal_pos is not None:
+                goal_room = self._get_room(self.goal_pos)
+                valid_positions = [
+                    (y, x) for y, x in valid_positions if self._get_room((y, x)) != goal_room
+                ]
+
+            if valid_positions:
+                idx = np.random.randint(len(valid_positions))
+                agent_y, agent_x = valid_positions[idx]
+            else:
+                # Fallback to corridor
+                agent_y = np.random.randint(2, 17)
+                agent_x = np.random.randint(8, 11)
 
         self.agent_pos = [agent_y, agent_x]
-        self.agent_dir = 0  # Facing right
+        self.agent_dir = np.random.randint(4)  # Random initial direction too
 
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
         """Reset the environment to initial state"""
@@ -308,14 +374,13 @@ class LockedRoomEnv(gym.Env):
         self.step_count = 0
         self.carrying = None
 
-        # Generate environment
+        # Generate environment - ORDER MATTERS
         self._generate_grid()
-        self._place_doors()
-        self._place_key()
-        self._place_goal()
-        self._place_agent()
+        self._place_goal()  # Goal first (needed for door placement)
+        self._place_doors()  # Door at goal's room entrance
+        self._place_key()  # Key in accessible area
+        self._place_agent()  # Agent last (avoids goal room if locked)
 
-        # Generate mission string
         self._generate_mission()
 
         return self._get_obs(), self._get_info()

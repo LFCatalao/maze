@@ -13,10 +13,10 @@ import numpy as np
 # =============================================================================
 
 REWARD_GOAL = 100.0
-REWARD_CLOSER = 1.0
-PENALTY_FURTHER = -0.5
+REWARD_CLOSER = 0.5
+PENALTY_FURTHER = -0.6
 PENALTY_STEP = -0.1
-REWARD_TURN = 0.5
+REWARD_TURN = 0.0
 REWARD_KEY_PICKUP = 20.0
 REWARD_DOOR_OPEN = 20.0
 
