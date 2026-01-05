@@ -9,16 +9,35 @@ import seaborn as sns
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from training.train_experiment import train
+from analysis.generate_figures import (
+    load_all_experiments, 
+    figure_1_learning_curves, 
+    figure_2_final_performance, 
+    figure_3_phase_completion, 
+    figure_4_heatmap, 
+    generate_summary_table
+)
+from analysis.compare_experiments import load_metrics, print_summary_table
+import analysis.compare_experiments as compare_exp
+import plot_results
 
 # Configuration
-ENVS = ['E1', 'E2', 'E3', 'E4', 'E5', 'E6_RANDOM']
-ALGOS = ['PPO', 'DQN', 'A2C', 'SARSA']
+ENVS = ['E1', 'E2', 'E3_FIXED'] #'E2', 'E3_FIXED', 'E4', 'E5_FIXED', 'E6_RANDOM'
+ALGOS = ['PPO', 'DQN', 'A2C'] # 'SARSA'
 TOTAL_TIMESTEPS = 10_000_000
 REWARD_ID = 'simple'
 OBS_MODE = 'full_map'
 
 RESULTS_DIR = "results/benchmark"
-os.makedirs(RESULTS_DIR, exist_ok=True)
+MODELS_DIR = os.path.join(RESULTS_DIR, "models")
+LOGS_DIR = os.path.join(RESULTS_DIR, "logs")
+FIGURES_DIR = os.path.join(RESULTS_DIR, "figures")
+PLOTS_DIR = os.path.join(RESULTS_DIR, "plots")
+
+os.makedirs(MODELS_DIR, exist_ok=True)
+os.makedirs(LOGS_DIR, exist_ok=True)
+os.makedirs(FIGURES_DIR, exist_ok=True)
+os.makedirs(PLOTS_DIR, exist_ok=True)
 
 def main():
     print(f"Starting benchmark with {TOTAL_TIMESTEPS} steps per model...")
@@ -42,9 +61,9 @@ def main():
                     algo=algo,
                     obs_mode=OBS_MODE,
                     total_timesteps=TOTAL_TIMESTEPS,
-                    checkpoint_freq=1_000_000,
-                    save_dir=os.path.join(RESULTS_DIR, "models"),
-                    log_dir=os.path.join(RESULTS_DIR, "logs"),
+                    checkpoint_freq=2_000_000,
+                    save_dir=MODELS_DIR,
+                    log_dir=LOGS_DIR,
                     seed=42
                 )
                 
@@ -70,67 +89,80 @@ def main():
         df_times.to_csv(os.path.join(RESULTS_DIR, "training_times.csv"), index=False)
         print(f"\nTraining times saved to {os.path.join(RESULTS_DIR, 'training_times.csv')}")
 
-    # Plotting
-    print("\nGenerating plots...")
-    all_data = []
+    # =========================================================================
+    # ANALYSIS & PLOTTING
+    # =========================================================================
+    print("\n" + "="*50)
+    print("GENERATING ANALYSIS")
+    print("="*50)
 
-    for env_id in ENVS:
-        for algo in ALGOS:
-            # Find monitor file
-            # Pattern: {env_id}_{reward_id}_{algo}_{obs_mode}_*
-            prefix = f"{env_id}_{REWARD_ID}_{algo}_{OBS_MODE}"
-            model_base_dir = os.path.join(RESULTS_DIR, "models")
-            
-            # Find matching directory (get the latest one if multiple)
-            found_dir = None
-            if os.path.exists(model_base_dir):
-                candidates = [d for d in os.listdir(model_base_dir) if d.startswith(prefix)]
-                if candidates:
-                    # Sort by timestamp (last part of name)
-                    candidates.sort()
-                    found_dir = os.path.join(model_base_dir, candidates[-1])
-            
-            if found_dir:
-                # Check for monitor.monitor.csv (common with some SB3 versions/wrappers) or monitor.csv
-                monitor_path = os.path.join(found_dir, "monitor.monitor.csv")
-                if not os.path.exists(monitor_path):
-                    monitor_path = os.path.join(found_dir, "monitor.csv")
-                
-                if os.path.exists(monitor_path):
-                    try:
-                        # Skip first line (metadata)
-                        df = pd.read_csv(monitor_path, skiprows=1)
-                        if len(df) > 0:
-                            df['Environment'] = env_id
-                            df['Algorithm'] = algo
-                            df['Timesteps'] = df['l'].cumsum()
-                            # Rolling mean for smoother plots
-                            df['Reward'] = df['r'].rolling(window=1000, min_periods=1).mean()
-                            all_data.append(df)
-                            print(f"Loaded data from {monitor_path}: {len(df)} episodes")
-                        else:
-                            print(f"Found {monitor_path} but it was empty (no episodes finished?)")
-                    except Exception as e:
-                        print(f"Error reading {monitor_path}: {e}")
-                else:
-                    print(f"No monitor file found in {found_dir}")
+    # 1. Generate Figures (Publication Ready)
+    print("\n--- Running generate_figures analysis ---")
+    try:
+        df = load_all_experiments(MODELS_DIR)
+        if df is not None and not df.empty:
+            figure_1_learning_curves(df, FIGURES_DIR)
+            figure_2_final_performance(df, FIGURES_DIR)
+            figure_3_phase_completion(df, FIGURES_DIR)
+            figure_4_heatmap(df, FIGURES_DIR)
+            generate_summary_table(df, FIGURES_DIR)
+        else:
+            print("No data found for generate_figures.")
+    except Exception as e:
+        print(f"Error in generate_figures: {e}")
+        import traceback
+        traceback.print_exc()
 
-    if all_data:
-        full_df = pd.concat(all_data)
+    # 2. Compare Experiments (Summary Table)
+    print("\n--- Running compare_experiments analysis ---")
+    try:
+        experiments = load_metrics(MODELS_DIR)
+        if experiments:
+            print_summary_table(experiments)
+            
+            # Monkeypatch plt.show to avoid blocking if running headless
+            original_show = plt.show
+            plt.show = lambda: None
+            
+            # We can't easily change where it saves "comparison_curves.png", 
+            # so we might move it after generation or just let it be.
+            # It saves to current working directory.
+            compare_exp.plot_learning_curves(experiments)
+            
+            # Restore plt.show
+            plt.show = original_show
+            
+            # Move the file if it exists
+            if os.path.exists("comparison_curves.png"):
+                import shutil
+                shutil.move("comparison_curves.png", os.path.join(FIGURES_DIR, "comparison_curves.png"))
+                print(f"Moved comparison_curves.png to {FIGURES_DIR}")
+        else:
+            print("No data found for compare_experiments.")
+    except Exception as e:
+        print(f"Error in compare_experiments: {e}")
+        import traceback
+        traceback.print_exc()
+
+    # 3. Plot Results (Alternative Plots)
+    print("\n--- Running plot_results analysis ---")
+    try:
+        # Configure plot_results globals
+        plot_results.RESULTS_DIR = MODELS_DIR
+        plot_results.OUTPUT_DIR = PLOTS_DIR
         
-        # Plot
-        try:
-            sns.set_theme()
-            g = sns.FacetGrid(full_df, col="Environment", col_wrap=3, sharex=False, sharey=False, height=4, aspect=1.5)
-            g.map_dataframe(sns.lineplot, x="Timesteps", y="Reward", hue="Algorithm")
-            g.add_legend()
-            
-            plt.savefig(os.path.join(RESULTS_DIR, "reward_progression.png"))
-            print(f"Plot saved to {os.path.join(RESULTS_DIR, 'reward_progression.png')}")
-        except Exception as e:
-            print(f"Error generating plot: {e}")
-    else:
-        print("No data found for plotting.")
+        data = plot_results.load_all_metrics(MODELS_DIR)
+        if data:
+            plot_results.plot_learning_curves(data)
+            plot_results.plot_final_comparison(data)
+        else:
+            print("No data found for plot_results.")
+    except Exception as e:
+        print(f"Error in plot_results: {e}")
+        import traceback
+        traceback.print_exc()
+
+    print("\nBenchmark and Analysis Complete!")
 
 if __name__ == "__main__":
     main()
