@@ -1,0 +1,7 @@
+Environment: E5_FIXED
+Reward: simple
+Algorithm: A2C
+Observation: full_map
+Total steps: 10000000
+Seed: 42
+Timestamp: 20260106_013511

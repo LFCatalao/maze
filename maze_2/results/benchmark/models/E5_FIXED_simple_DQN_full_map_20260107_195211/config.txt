@@ -1,0 +1,7 @@
+Environment: E5_FIXED
+Reward: simple
+Algorithm: DQN
+Observation: full_map
+Total steps: 20000000
+Seed: 42
+Timestamp: 20260107_195211
