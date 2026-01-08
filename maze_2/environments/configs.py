@@ -88,10 +88,8 @@ E3_FIXED_DOOR_KEY = EnvConfig(
     name="E3_fixed_door_key",
     description="Fixed agent, 1 fixed door, fixed key, fixed exit behind door",
     fixed_agent_pos=(9, 9),
-    fixed_goal_pos=(3, 3), # Top Left Room
-    defined_doors=[
-        {'door_idx': 0, 'key_pos': (15, 15)} # Door 0 (Top Left), Key in Bot Right
-    ],
+    fixed_goal_pos=(3, 3),  # Top Left Room
+    defined_doors=[{"door_idx": 0, "key_pos": (15, 15)}],  # Door 0 (Top Left), Key in Bot Right
     max_steps=400,
 )
 
@@ -154,12 +152,12 @@ E5_CUSTOM_DOORS = EnvConfig(
     name="E5_custom_doors",
     description="Custom door and key placement",
     fixed_agent_pos=(9, 9),
-    fixed_goal_pos=(3, 3), # Top Left
+    fixed_goal_pos=(3, 3),  # Top Left
     defined_doors=[
         # Door 0: Top Left (Yellow)
-        {'door_idx': 0, 'key_pos': (15, 15)}, # Key fixed in Bot Right
+        {"door_idx": 0, "key_pos": (15, 15)},  # Key fixed in Bot Right
         # Door 2: Bot Left (Blue)
-        {'door_idx': 2, 'key_pos': None},     # Key Random
+        {"door_idx": 2, "key_pos": None},  # Key Random
     ],
     max_steps=500,
 )
@@ -169,12 +167,12 @@ E5_MULTI_DOOR_FIXED = EnvConfig(
     name="E5_multi_door_fixed",
     description="Fixed agent, 4 fixed doors, exit behind one, keys in others",
     fixed_agent_pos=(9, 9),
-    fixed_goal_pos=(3, 3), # Top Left (Behind Door 0)
+    fixed_goal_pos=(3, 3),  # Top Left (Behind Door 0)
     defined_doors=[
-        {'door_idx': 0, 'key_pos': (3, 15)}, # Top Left Door -> Key in Bot Left (Room 2, no door)
-        {'door_idx': 1, 'key_pos': (15, 3)}, # Mid Left Door -> Key in Top Right (Room 3)
-        {'door_idx': 3, 'key_pos': (9, 15)}, # Top Right Door -> Key in Mid Right (Room 4)
-        {'door_idx': 4, 'key_pos': (9, 3)},  # Mid Right Door -> Key in Mid Left (Room 1)
+        {"door_idx": 0, "key_pos": (3, 15)},  # Top Left Door -> Key in Bot Left (Room 2, no door)
+        {"door_idx": 1, "key_pos": (15, 3)},  # Mid Left Door -> Key in Top Right (Room 3)
+        {"door_idx": 3, "key_pos": (9, 15)},  # Top Right Door -> Key in Mid Right (Room 4)
+        {"door_idx": 4, "key_pos": (9, 3)},  # Mid Right Door -> Key in Mid Left (Room 1)
     ],
     max_steps=500,
 )
@@ -193,7 +191,6 @@ E6_MULTI_DOOR_RANDOM = EnvConfig(
     enable_key_chain=True,
     max_steps=500,
 )
-
 
 
 # =============================================================================

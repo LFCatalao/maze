@@ -162,26 +162,75 @@ class SimpleRewardWrapper(gym.RewardWrapper):
         return base_env
 
     def _get_current_target(self):
-        """Return current target: key -> door -> goal."""
+        """Return current target: accessible key -> door we can open -> goal."""
         base_env = self._get_base_env()
 
-        # Phase 1: No key yet -> target is key
-        if (
-            base_env.carrying is None
-            and hasattr(base_env, "key_positions")
-            and base_env.key_positions
-        ):
-            return list(base_env.key_positions.keys())[0]
+        # Phase 1: Not carrying a key -> find an ACCESSIBLE key (if any exist)
+        if base_env.carrying is None:
+            if hasattr(base_env, "key_positions") and base_env.key_positions:
+                accessible_key = self._find_accessible_key(base_env)
+                if accessible_key:
+                    return accessible_key
+            # No keys left -> target is goal
+            return base_env.goal_pos
 
-        # Phase 2: Have key, door locked -> target is door
+        # Phase 2: Carrying a key -> find the matching locked door
         if hasattr(base_env, "door_positions") and base_env.door_positions:
-            door_pos = list(base_env.door_positions.keys())[0]
-            door_state = base_env.grid[door_pos[0], door_pos[1], 2]
-            if door_state == 2:  # Locked
-                return door_pos
+            for door_pos, (door_color, door_state) in base_env.door_positions.items():
+                if door_state == 2 and door_color == base_env.carrying:
+                    return door_pos
 
-        # Phase 3: Door open -> target is goal
+        # Phase 3: Have key but no matching locked door (shouldn't happen) -> goal
         return base_env.goal_pos
+
+    def _find_accessible_key(self, base_env):
+        """Find a key that is not behind a locked door."""
+        # Build set of rooms blocked by locked doors
+        blocked_rooms = set()
+
+        # Door position to room index mapping
+        door_to_room = {(3, 7): 0, (9, 7): 1, (15, 7): 2, (3, 11): 3, (9, 11): 4, (15, 11): 5}
+
+        if hasattr(base_env, "door_positions"):
+            for door_pos, (color, state) in base_env.door_positions.items():
+                if state == 2:  # Locked
+                    if door_pos in door_to_room:
+                        blocked_rooms.add(door_to_room[door_pos])
+
+        # Find a key not in a blocked room
+        for key_pos, key_color in base_env.key_positions.items():
+            key_room = self._get_room_index(key_pos)
+            if key_room not in blocked_rooms:
+                return key_pos
+
+        # Fallback: return first key (shouldn't happen in well-designed envs)
+        return list(base_env.key_positions.keys())[0]
+
+    def _get_room_index(self, pos):
+        """Get room index for a position (matches env logic)."""
+        y, x = pos
+
+        # Corridor
+        if 7 <= x <= 11:
+            return -1
+
+        # Left side rooms
+        if x < 7:
+            if y <= 5:
+                return 0
+            if y <= 11:
+                return 1
+            return 2
+
+        # Right side rooms
+        if x > 11:
+            if y <= 5:
+                return 3
+            if y <= 11:
+                return 4
+            return 5
+
+        return -1
 
     def _distance_to_target(self):
         """Distance to nearest adjacent cell of current target."""
@@ -256,12 +305,13 @@ class SimpleRewardWrapper(gym.RewardWrapper):
         old_pos = tuple(self.env.agent_pos)
         base_env = self._get_base_env()
         had_key_before = base_env.carrying is not None
+        key_color_before = base_env.carrying
 
-        # Check door state before
-        door_open_before = False
+        # Track ALL door states before action
+        door_states_before = {}
         if hasattr(base_env, "door_positions") and base_env.door_positions:
-            door_pos = list(base_env.door_positions.keys())[0]
-            door_open_before = base_env.grid[door_pos[0], door_pos[1], 2] == 0
+            for door_pos in base_env.door_positions:
+                door_states_before[door_pos] = base_env.grid[door_pos[0], door_pos[1], 2]
 
         obs, base_reward, terminated, truncated, info = self.env.step(action)
 
@@ -273,31 +323,32 @@ class SimpleRewardWrapper(gym.RewardWrapper):
         if base_reward > 0:
             return obs, REWARD_GOAL, terminated, truncated, info
 
-        reward = PENALTY_STEP  # Always -0.1
+        reward = PENALTY_STEP
 
         # Key pickup bonus
         if has_key_now and not had_key_before:
             reward += REWARD_KEY_PICKUP
             self.previous_distance = self._distance_to_target()
-            self.gave_turn_bonus = False  # Reset for door phase
+            self.gave_turn_bonus = False
             return obs, reward, terminated, truncated, info
 
-        # Door open bonus
+        # Door open bonus - check ALL doors
         if hasattr(base_env, "door_positions") and base_env.door_positions:
-            door_pos = list(base_env.door_positions.keys())[0]
-            door_open_now = base_env.grid[door_pos[0], door_pos[1], 2] == 0
-            if door_open_now and not door_open_before:
-                reward += REWARD_DOOR_OPEN
-                self.previous_distance = self._distance_to_target()
-                self.gave_turn_bonus = False  # Reset for goal phase
-                return obs, reward, terminated, truncated, info
+            for door_pos in base_env.door_positions:
+                state_before = door_states_before.get(door_pos, 0)
+                state_now = base_env.grid[door_pos[0], door_pos[1], 2]
+                if state_before == 2 and state_now == 0:  # Was locked, now open
+                    reward += REWARD_DOOR_OPEN
+                    self.previous_distance = self._distance_to_target()
+                    self.gave_turn_bonus = False
+                    return obs, reward, terminated, truncated, info
 
-        # Distance reward
+        # Distance reward (only reached if no key pickup or door open)
         current_distance = self._distance_to_target()
         if current_distance < self.previous_distance:
             reward += REWARD_CLOSER
         elif current_distance > self.previous_distance:
-            reward += PENALTY_FURTHER
+            reward += PENALTY_FURTHER * 0
         self.previous_distance = current_distance
 
         # One-time turn bonus when facing target
