@@ -1,0 +1,52 @@
+# Full experimental design
+experiments:
+  # Dimension 1: Environment complexity
+  environments:
+    - id: E1
+      description: "Fixed positions, no obstacles"
+      complexity: baseline
+    - id: E2
+      description: "Fixed agent, random goal"
+      complexity: goal_generalization
+    - id: E3
+      description: "Fixed positions, key-door task"
+      complexity: sequential_task
+    - id: E4
+      description: "Random agent, key-door task"
+      complexity: start_generalization
+    - id: E5
+      description: "Random positions, no obstacles"
+      complexity: full_nav_generalization
+    - id: E6
+      description: "Random everything, key-door task"
+      complexity: full_generalization
+
+  # Dimension 2: Algorithms
+  algorithms:
+    - id: PPO
+      timesteps: 200000
+      description: "On-policy, stable"
+    - id: DQN
+      timesteps: 200000
+      description: "Off-policy, sample efficient"
+    - id: A2C
+      timesteps: 200000
+      description: "On-policy, faster updates"
+
+  # Dimension 3: Seeds (for statistical significance)
+  seeds: [42, 123, 456, 789, 1024]
+
+# What to measure
+metrics:
+  primary:
+    - success_rate
+    - episode_length
+    - cumulative_reward
+  secondary:
+    - key_pickup_rate
+    - door_open_rate
+    - time_to_threshold  # Steps to reach 80% success
+  training:
+    - entropy
+    - policy_loss
+    - value_loss
