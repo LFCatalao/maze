@@ -214,6 +214,160 @@ def get_base_env(env):
     return base_env
 
 
+def print_observation(obs):
+    """Print the observation space in a readable format"""
+    print("\n" + "="*70)
+    print("OBSERVATION SPACE - What the Model Sees:")
+    print("="*70)
+    
+    # 1. Print the 7x7 image view (symbolic)
+    print("\n[1] Agent's 7x7 View (Symbolic):")
+    print("-" * 40)
+    image = obs['image']
+    
+    obj_symbols = {
+        Objects.EMPTY: '.',
+        Objects.WALL: '#',
+        Objects.DOOR: 'D',
+        Objects.KEY: 'K',
+        Objects.GOAL: 'G',
+    }
+    
+    for i in range(7):
+        row = ""
+        for j in range(7):
+            obj = image[i, j, 0]
+            # Mark center (agent position) with @
+            if i == 3 and j == 3:
+                row += "@ "
+            else:
+                row += obj_symbols.get(obj, '?') + " "
+        print(row)
+    
+    # 2. Print the 7x7 image view (raw numerical values)
+    print("\n[2] Agent's 7x7 View (Raw Tensor Values):")
+    print("-" * 40)
+    print("Format: [Object_Type, Color_Index, State]")
+    for i in range(7):
+        row_str = ""
+        for j in range(7):
+            obj = image[i, j, 0]
+            color = image[i, j, 1]
+            state = image[i, j, 2]
+            if i == 3 and j == 3:
+                row_str += f"[@{obj},{color},{state}] "
+            else:
+                row_str += f"[{obj},{color},{state}] "
+        print(row_str)
+    
+    # 3. Print carrying observation
+    from environments.base_env import COLOR_NAMES
+    print(f"\n[3] Carrying (Integer Value): {obs['carrying']}")
+    carrying_text = "nothing"
+    if obs['carrying'] < len(Colors):
+        carrying_text = COLOR_NAMES.get(obs['carrying'], "unknown") + " key"
+    print(f"    Interpretation: {carrying_text}")
+    
+    # 4. Print explored map (condensed view)
+    print("\n[4] Explored Map (19x19 Fog of War) - Symbolic:")
+    print("-" * 40)
+    explored_map = obs['explored_map']
+    
+    # Show what has been explored with symbols
+    print("Legend: . = Unexplored, # = Wall, D = Door, K = Key, G = Goal, (space) = Empty")
+    for y in range(19):
+        row = ""
+        for x in range(19):
+            obj = explored_map[y, x, 0]
+            # A cell is explored if state != 0 OR object is not EMPTY
+            is_explored = (explored_map[y, x, 2] != 0 or obj != Objects.EMPTY)
+            
+            if not is_explored:
+                row += ". "
+            elif obj == Objects.WALL:
+                row += "# "
+            elif obj == Objects.DOOR:
+                row += "D "
+            elif obj == Objects.KEY:
+                row += "K "
+            elif obj == Objects.GOAL:
+                row += "G "
+            else:  # Empty explored cell
+                row += "  "
+        print(row)
+    
+    # Count explored cells
+    explored_count = 0
+    for y in range(19):
+        for x in range(19):
+            is_explored = (explored_map[y, x, 2] != 0 or explored_map[y, x, 0] != Objects.EMPTY)
+            if is_explored:
+                explored_count += 1
+    
+    total_cells = 19 * 19
+    exploration_pct = (explored_count / total_cells) * 100
+    print(f"\nExploration: {explored_count}/{total_cells} cells ({exploration_pct:.1f}%)")
+    
+    # 5. Show detailed information about discovered objects
+    print("\n[5] Discovered Objects (from Explored Map):")
+    print("-" * 40)
+    
+    doors_found = []
+    keys_found = []
+    goal_found = None
+    
+    for y in range(19):
+        for x in range(19):
+            obj = explored_map[y, x, 0]
+            color = explored_map[y, x, 1]
+            state = explored_map[y, x, 2]
+            
+            is_explored = (state != 0 or obj != Objects.EMPTY)
+            if not is_explored:
+                continue
+                
+            if obj == Objects.DOOR:
+                color_name = COLOR_NAMES.get(color, "unknown")
+                state_name = "LOCKED" if state == 2 else ("CLOSED" if state == 1 else "OPEN")
+                doors_found.append(f"  Door at ({y},{x}): {color_name.upper()} - {state_name}")
+            elif obj == Objects.KEY:
+                color_name = COLOR_NAMES.get(color, "unknown")
+                keys_found.append(f"  Key at ({y},{x}): {color_name.upper()}")
+            elif obj == Objects.GOAL:
+                goal_found = f"  Goal at ({y},{x})"
+    
+    if doors_found:
+        print("Doors discovered:")
+        for door in doors_found:
+            print(door)
+    else:
+        print("Doors discovered: None")
+    
+    if keys_found:
+        print("\nKeys discovered:")
+        for key in keys_found:
+            print(key)
+    else:
+        print("\nKeys discovered: None")
+    
+    if goal_found:
+        print(f"\n{goal_found}")
+    else:
+        print("\nGoal discovered: Not yet")
+    
+    # 6. Summary
+    print("\n" + "="*70)
+    print("OBSERVATION SPACE SUMMARY:")
+    print(f"  - image: 7x7x3 numpy array (partial view)")
+    print(f"  - carrying: {obs['carrying']} (discrete value 0-{len(Colors)})")
+    print(f"  - explored_map: 19x19x3 numpy array ({exploration_pct:.1f}% explored)")
+    print("\nExplored Map Encoding:")
+    print("  - Channel 0: Object Type (0=Empty, 1=Wall, 2=Door, 3=Key, 4=Goal)")
+    print("  - Channel 1: Color (0=Red, 1=Green, 2=Blue, 3=Purple, 4=Yellow, 5=Grey)")
+    print("  - Channel 2: State (0=Open, 1=Closed, 2=Locked) or 1 for explored empty cells")
+    print("="*70 + "\n")
+
+
 def main():
     """Main loop for manual control"""
     # Initialize pygame
@@ -290,6 +444,9 @@ def main():
                         
                         # Print reward for each step
                         print(f"Step {base_env.step_count}: Reward = {reward:.2f}")
+                        
+                        # Print observation space
+                        print_observation(obs)
                         
                         if terminated:
                             print(f"\n*** GOAL REACHED! Total Reward: {reward:.2f} ***")
