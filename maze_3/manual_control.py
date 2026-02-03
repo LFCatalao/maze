@@ -233,32 +233,32 @@ def print_observation(obs):
         Objects.GOAL: 'G',
     }
     
-    for i in range(7):
-        row = ""
-        for j in range(7):
-            obj = image[i, j, 0]
-            # Mark center (agent position) with @
-            if i == 3 and j == 3:
-                row += "@ "
-            else:
-                row += obj_symbols.get(obj, '?') + " "
-        print(row)
+    # for i in range(7):
+    #     row = ""
+    #     for j in range(7):
+    #         obj = image[i, j, 0]
+    #         # Mark center (agent position) with @
+    #         if i == 3 and j == 3:
+    #             row += "@ "
+    #         else:
+    #             row += obj_symbols.get(obj, '?') + " "
+    #     print(row)
     
     # 2. Print the 7x7 image view (raw numerical values)
-    print("\n[2] Agent's 7x7 View (Raw Tensor Values):")
-    print("-" * 40)
-    print("Format: [Object_Type, Color_Index, State]")
-    for i in range(7):
-        row_str = ""
-        for j in range(7):
-            obj = image[i, j, 0]
-            color = image[i, j, 1]
-            state = image[i, j, 2]
-            if i == 3 and j == 3:
-                row_str += f"[@{obj},{color},{state}] "
-            else:
-                row_str += f"[{obj},{color},{state}] "
-        print(row_str)
+    # print("\n[2] Agent's 7x7 View (Raw Tensor Values):")
+    # print("-" * 40)
+    # print("Format: [Object_Type, Color_Index, State]")
+    # for i in range(7):
+    #     row_str = ""
+    #     for j in range(7):
+    #         obj = image[i, j, 0]
+    #         color = image[i, j, 1]
+    #         state = image[i, j, 2]
+    #         if i == 3 and j == 3:
+    #             row_str += f"[@{obj},{color},{state}] "
+    #         else:
+    #             row_str += f"[{obj},{color},{state}] "
+    #     print(row_str)
     
     # 3. Print carrying observation
     from environments.base_env import COLOR_NAMES
@@ -274,27 +274,27 @@ def print_observation(obs):
     explored_map = obs['explored_map']
     
     # Show what has been explored with symbols
-    print("Legend: . = Unexplored, # = Wall, D = Door, K = Key, G = Goal, (space) = Empty")
-    for y in range(19):
-        row = ""
-        for x in range(19):
-            obj = explored_map[y, x, 0]
-            # A cell is explored if state != 0 OR object is not EMPTY
-            is_explored = (explored_map[y, x, 2] != 0 or obj != Objects.EMPTY)
+    # print("Legend: . = Unexplored, # = Wall, D = Door, K = Key, G = Goal, (space) = Empty")
+    # for y in range(19):
+    #     row = ""
+    #     for x in range(19):
+    #         obj = explored_map[y, x, 0]
+    #         # A cell is explored if state != 0 OR object is not EMPTY
+    #         is_explored = (explored_map[y, x, 2] != 0 or obj != Objects.EMPTY)
             
-            if not is_explored:
-                row += ". "
-            elif obj == Objects.WALL:
-                row += "# "
-            elif obj == Objects.DOOR:
-                row += "D "
-            elif obj == Objects.KEY:
-                row += "K "
-            elif obj == Objects.GOAL:
-                row += "G "
-            else:  # Empty explored cell
-                row += "  "
-        print(row)
+    #         if not is_explored:
+    #             row += ". "
+    #         elif obj == Objects.WALL:
+    #             row += "# "
+    #         elif obj == Objects.DOOR:
+    #             row += "D "
+    #         elif obj == Objects.KEY:
+    #             row += "K "
+    #         elif obj == Objects.GOAL:
+    #             row += "G "
+    #         else:  # Empty explored cell
+    #             row += "  "
+    #     print(row)
     
     # Count explored cells
     explored_count = 0
@@ -442,8 +442,33 @@ def main():
                         obs, reward, terminated, truncated, info = env.step(action)
                         last_reward = reward
                         
-                        # Print reward for each step
-                        print(f"Step {base_env.step_count}: Reward = {reward:.2f}")
+                        # Print reward breakdown for each step
+                        print(f"\n{'='*70}")
+                        print(f"Step {base_env.step_count}: Total Reward = {reward:.2f}")
+                        
+                        # Print detailed reward breakdown
+                        if 'reward_breakdown' in info:
+                            breakdown = info['reward_breakdown']
+                            print(f"{'='*70}")
+                            print("REWARD BREAKDOWN:")
+                            print(f"{'-'*70}")
+                            
+                            # Filter out zero values for cleaner display
+                            non_zero_rewards = {k: v for k, v in breakdown.items() if v != 0.0}
+                            
+                            if non_zero_rewards:
+                                for component, value in non_zero_rewards.items():
+                                    # Format component name nicely
+                                    name = component.replace('_', ' ').title()
+                                    sign = "+" if value > 0 else ""
+                                    print(f"  {name:.<50} {sign}{value:.2f}")
+                                print(f"{'-'*70}")
+                                print(f"  {'Total':.<50} {reward:.2f}")
+                            else:
+                                print("  (No rewards this step)")
+                            print(f"{'='*70}")
+                        else:
+                            print(f"{'='*70}")
                         
                         # Print observation space
                         print_observation(obs)

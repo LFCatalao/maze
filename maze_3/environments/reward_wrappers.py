@@ -13,17 +13,18 @@ import numpy as np
 # =============================================================================
 
 REWARD_GOAL = 100.0
-REWARD_CLOSER = 0.5
+REWARD_CLOSER = 2
+REWARD_CLOSER_TO_EXIT = 0.2  # Reduced reward for moving toward room exit (prevent abuse)
 PENALTY_FURTHER = 0.0  # Removed - already captured by REWARD_CLOSER
-PENALTY_STEP = -0.1
+PENALTY_STEP = -0.4
 REWARD_TURN = 0.0
 REWARD_KEY_PICKUP = 20.0
 REWARD_DOOR_OPEN = 20.0
 
 # New exploration rewards
-REWARD_EXPLORATION = 0.3  # Bonus for seeing a new cell
-PENALTY_EMPTY_ROOM = -0.2  # Penalty per step in fully explored empty room
-REWARD_USEFUL_ROOM = 0.1  # Reward per step in room with objective
+REWARD_EXPLORATION = 0.2  # Bonus for seeing a new cell
+PENALTY_EMPTY_ROOM = 0  # Penalty per step in fully explored empty room
+REWARD_USEFUL_ROOM = 0  # Reward per step in room with objective
 
 
 # =============================================================================
@@ -146,29 +147,56 @@ class SimpleRewardWrapper(gym.RewardWrapper):
         return base_env
 
     def _get_current_target(self):
-        """Return current target: accessible key -> door we can open -> goal."""
+        """Return current target: accessible key -> door we can open -> goal. Only considers discovered objects."""
         base_env = self._get_base_env()
+        
+        # First, check if agent is in a fully explored empty room - if so, target the exit
+        current_pos = tuple(base_env.agent_pos)
+        current_room = self._get_room_index(current_pos)
+        
+        if current_room != -1:  # Not in corridor
+            if self._is_room_fully_explored(current_room):
+                if not self._room_has_useful_item(current_room):
+                    # In a fully explored empty room - target the door/exit
+                    exit_door = self._get_room_door(current_room)
+                    if exit_door and self._is_position_explored(exit_door):
+                        return exit_door
 
-        # Phase 1: Not carrying a key -> find an ACCESSIBLE key (if any exist)
+        # Phase 1: Not carrying a key -> find an ACCESSIBLE key (if any exist and are discovered)
         if base_env.carrying is None:
             if hasattr(base_env, "key_positions") and base_env.key_positions:
                 accessible_key = self._find_accessible_key(base_env)
-                if accessible_key:
+                if accessible_key and self._is_position_explored(accessible_key):
                     return accessible_key
-            # No keys left -> target is goal
-            return base_env.goal_pos
+            # No discovered keys -> check if goal is discovered, otherwise return agent position
+            if self._is_position_explored(base_env.goal_pos):
+                return base_env.goal_pos
+            else:
+                # Goal not discovered yet - no valid target, return current position
+                return tuple(base_env.agent_pos)
 
-        # Phase 2: Carrying a key -> find the matching locked door
+        # Phase 2: Carrying a key -> find the matching locked door (if discovered)
         if hasattr(base_env, "door_positions") and base_env.door_positions:
             for door_pos, (door_color, door_state) in base_env.door_positions.items():
                 if door_state == 2 and door_color == base_env.carrying:
-                    return door_pos
+                    if self._is_position_explored(door_pos):
+                        return door_pos
 
-        # Phase 3: Have key but no matching locked door (shouldn't happen) -> goal
-        return base_env.goal_pos
+        # Phase 3: No key needed or door already open -> go to goal (if discovered)
+        if self._is_position_explored(base_env.goal_pos):
+            return base_env.goal_pos
+
+        # No valid discovered target
+        return tuple(base_env.agent_pos)
+
+    def _is_position_explored(self, pos):
+        """Check if a position has been explored (seen by the agent)."""
+        if pos is None:
+            return False
+        return pos in self.explored_cells
 
     def _find_accessible_key(self, base_env):
-        """Find a key that is not behind a locked door."""
+        """Find a key that is not behind a locked door AND has been discovered."""
         # Build set of rooms blocked by locked doors
         blocked_rooms = set()
 
@@ -181,14 +209,31 @@ class SimpleRewardWrapper(gym.RewardWrapper):
                     if door_pos in door_to_room:
                         blocked_rooms.add(door_to_room[door_pos])
 
-        # Find a key not in a blocked room
+        # Find a key not in a blocked room AND that has been discovered
         for key_pos, key_color in base_env.key_positions.items():
+            # Only consider keys that have been explored
+            if not self._is_position_explored(key_pos):
+                continue
+                
             key_room = self._get_room_index(key_pos)
             if key_room not in blocked_rooms:
                 return key_pos
 
-        # Fallback: return first key (shouldn't happen in well-designed envs)
-        return list(base_env.key_positions.keys())[0]
+        # No accessible discovered key found
+        return None
+
+    def _get_room_door(self, room_idx):
+        """Get the door position for a given room index."""
+        # Map room indices to door positions
+        room_to_door = {
+            0: (3, 7),   # left_top
+            1: (9, 7),   # left_middle
+            2: (15, 7),  # left_bottom
+            3: (3, 11),  # right_top
+            4: (9, 11),  # right_middle
+            5: (15, 11)  # right_bottom
+        }
+        return room_to_door.get(room_idx)
 
     def _get_room_index(self, pos):
         """Get room index for a position (matches env logic)."""
@@ -245,7 +290,7 @@ class SimpleRewardWrapper(gym.RewardWrapper):
         return True
 
     def _room_has_useful_item(self, room_idx):
-        """Check if room contains key, door, or goal."""
+        """Check if room contains key, door, or goal that is still relevant."""
         if room_idx == -1:
             return False
 
@@ -272,18 +317,25 @@ class SimpleRewardWrapper(gym.RewardWrapper):
             if y1 <= gy <= y2 and x1 <= gx <= x2:
                 return True
 
-        # Check for keys
-        if hasattr(base_env, 'key_positions'):
-            for (ky, kx), _ in base_env.key_positions.items():
+        # Check for keys that are ACTUALLY STILL ON THE GRID (not picked up)
+        # A key is still useful only if it's in key_positions AND on the grid
+        if hasattr(base_env, 'key_positions') and base_env.key_positions:
+            for (ky, kx), key_color in base_env.key_positions.items():
                 if y1 <= ky <= y2 and x1 <= kx <= x2:
-                    return True
+                    # Verify the key is actually still on the grid
+                    # Grid encoding: [object_type, color, state]
+                    # Object type 3 = KEY
+                    if base_env.grid[ky, kx, 0] == 3:
+                        return True
 
-        # Check for doors (doors are at room entrances, we consider them part of the room)
-        if hasattr(base_env, 'door_positions'):
-            for (dy, dx), _ in base_env.door_positions.items():
-                # Doors at boundaries - check if adjacent to this room
+        # Check for locked doors that we need to open
+        # Only count doors as useful if they're still locked (state 2)
+        if hasattr(base_env, 'door_positions') and base_env.door_positions:
+            for (dy, dx), (door_color, door_state) in base_env.door_positions.items():
+                # Only count if door is in/near this room AND still locked
                 if y1 <= dy <= y2 and x1 <= dx <= x2:
-                    return True
+                    if door_state == 2:  # Still locked
+                        return True
 
         return False
 
@@ -303,51 +355,162 @@ class SimpleRewardWrapper(gym.RewardWrapper):
                     if (y, x) not in self.explored_cells:
                         self.explored_cells.add((y, x))
                         new_cells += 1
-
+        
         return new_cells
 
     def _distance_to_target(self):
-        """Distance to nearest adjacent cell of current target."""
+        """
+        Calculate BFS distance to current target.
+        Returns 0 if no valid target exists (nothing discovered yet).
+        """
         base_env = self._get_base_env()
-        pos = base_env.agent_pos
+        pos = tuple(base_env.agent_pos)  # Convert to tuple for hashing
         target = self._get_current_target()
+        
+        # If target is current position (no valid target), return 0
+        if target == pos:
+            return 0
 
-        # For key and door, we need to be adjacent
-        # For goal, we step on it directly
+        from collections import deque
+
+        queue = deque([(pos, 0)])  # (position, distance)
+        visited = {pos}
+        
+        # For keys and doors, we need to reach adjacent cells
+        need_adjacent = False
         if (
             base_env.carrying is None
             and hasattr(base_env, "key_positions")
             and base_env.key_positions
         ):
-            # Key phase - distance to adjacent cell
-            distances = [
-                abs(pos[0] - (target[0] - 1)) + abs(pos[1] - target[1]),
-                abs(pos[0] - (target[0] + 1)) + abs(pos[1] - target[1]),
-                abs(pos[0] - target[0]) + abs(pos[1] - (target[1] - 1)),
-                abs(pos[0] - target[0]) + abs(pos[1] - (target[1] + 1)),
-            ]
-            return min(distances)
+            need_adjacent = True
+        elif hasattr(base_env, "door_positions") and base_env.door_positions:
+            for door_pos, (door_color, door_state) in base_env.door_positions.items():
+                if door_state == 2 and door_color == base_env.carrying:
+                    if self._is_position_explored(door_pos):
+                        need_adjacent = True
+                    break
 
-        # Door phase - also need adjacent
-        if hasattr(base_env, "door_positions") and base_env.door_positions:
-            door_pos = list(base_env.door_positions.keys())[0]
-            door_state = base_env.grid[door_pos[0], door_pos[1], 2]
-            if door_state == 2:  # Still locked
-                distances = [
-                    abs(pos[0] - (target[0] - 1)) + abs(pos[1] - target[1]),
-                    abs(pos[0] - (target[0] + 1)) + abs(pos[1] - target[1]),
-                    abs(pos[0] - target[0]) + abs(pos[1] - (target[1] - 1)),
-                    abs(pos[0] - target[0]) + abs(pos[1] - (target[1] + 1)),
-                ]
-                return min(distances)
-
-        # Goal phase - direct distance
-        return abs(pos[0] - target[0]) + abs(pos[1] - target[1])
+        while queue:
+            current, dist = queue.popleft()
+            
+            # Check if we reached the goal
+            if current == target:
+                return dist
+            
+            # For keys/doors, check if we're adjacent
+            if need_adjacent and abs(current[0] - target[0]) + abs(current[1] - target[1]) == 1:
+                return dist
+            
+            # Explore neighbors
+            for dy, dx in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                next_pos = (current[0] + dy, current[1] + dx)
+                
+                if next_pos in visited:
+                    continue
+                
+                # Check bounds
+                if not (0 <= next_pos[0] < base_env.size and 0 <= next_pos[1] < base_env.size):
+                    continue
+                
+                # Check if cell is walkable
+                if not self._is_walkable(next_pos):
+                    continue
+                
+                visited.add(next_pos)
+                queue.append((next_pos, dist + 1))
+        
+        # No path found
+        return float('inf')
 
     def _facing_target(self):
         """Check if moving toward current target (simplified for omnidirectional)."""
         # Since we have omnidirectional movement, this concept doesn't apply
         # We'll just return True to not break existing logic
+        return True
+
+    def _has_open_path(self, start, target):
+        """
+        Check if there's an open path from start to target using BFS.
+        A path is blocked if there are walls or locked doors we can't open.
+        """
+        base_env = self._get_base_env()
+        
+        # BFS to find if target is reachable
+        from collections import deque
+        
+        queue = deque([start])
+        visited = {start}
+        
+        while queue:
+            current = queue.popleft()
+            
+            # Check if we reached the target (or adjacent to it for keys/doors)
+            if current == target:
+                return True
+            
+            # For keys and doors, being adjacent is enough
+            if abs(current[0] - target[0]) + abs(current[1] - target[1]) == 1:
+                return True
+            
+            # Explore neighbors (up, down, left, right)
+            for dy, dx in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                next_pos = (current[0] + dy, current[1] + dx)
+                
+                if next_pos in visited:
+                    continue
+                
+                # Check bounds
+                if not (0 <= next_pos[0] < base_env.size and 0 <= next_pos[1] < base_env.size):
+                    continue
+                
+                # Check if cell is walkable
+                if not self._is_walkable(next_pos):
+                    continue
+                
+                visited.add(next_pos)
+                queue.append(next_pos)
+        
+        return False
+
+    def _is_walkable(self, pos):
+        """
+        Check if a position is walkable.
+        A cell is walkable if it's not a wall and not a locked door we can't open.
+        """
+        base_env = self._get_base_env()
+        y, x = pos
+        
+        # Get cell type from grid
+        # Grid encoding: [object_type, color, state]
+        # Objects: EMPTY=0, WALL=1, DOOR=2, KEY=3, GOAL=4
+        cell_type = base_env.grid[y, x, 0]
+        
+        # Wall check (Objects.WALL = 1)
+        if cell_type == 1:
+            return False
+        
+        # Check if it's a door (Objects.DOOR = 2)
+        if cell_type == 2:
+            # Check door state from grid
+            door_state = base_env.grid[y, x, 2]
+            door_color = base_env.grid[y, x, 1]
+            
+            # If door is open (state 0), it's walkable
+            if door_state == 0:
+                return True
+            
+            # If door is locked (state 2), check if we have the matching key
+            if door_state == 2:
+                if base_env.carrying == door_color:
+                    return True  # We can open it
+                else:
+                    return False  # Blocked by locked door
+            
+            # Door is closed but not locked (state 1) - can walk through
+            return True
+        
+        # Otherwise, it's walkable (empty space, goal, key, etc.)
         return True
 
     def reset(self, **kwargs):
@@ -384,21 +547,41 @@ class SimpleRewardWrapper(gym.RewardWrapper):
         moved = old_pos != new_pos
         has_key_now = base_env.carrying is not None
 
+        # Initialize reward breakdown tracking
+        reward_breakdown = {
+            'step_penalty': 0.0,
+            'exploration': 0.0,
+            'key_pickup': 0.0,
+            'door_open': 0.0,
+            'closer_to_target': 0.0,
+            'useful_room': 0.0,
+            'empty_room_penalty': 0.0,
+            'repeat_action_penalty': 0.0,
+            'goal_reached': 0.0,
+        }
+
         # Goal reached
         if base_reward > 0:
+            reward_breakdown['goal_reached'] = REWARD_GOAL
+            info['reward_breakdown'] = reward_breakdown
             return obs, REWARD_GOAL, terminated, truncated, info
 
         reward = PENALTY_STEP
+        reward_breakdown['step_penalty'] = PENALTY_STEP
 
         # Exploration bonus - reward for seeing new cells
         new_cells_count = self._update_explored_cells(obs)
         if new_cells_count > 0:
-            reward += REWARD_EXPLORATION * new_cells_count
+            exploration_reward = REWARD_EXPLORATION * new_cells_count
+            reward += exploration_reward
+            reward_breakdown['exploration'] = exploration_reward
 
         # Key pickup bonus
         if has_key_now and not had_key_before:
             reward += REWARD_KEY_PICKUP
+            reward_breakdown['key_pickup'] = REWARD_KEY_PICKUP
             self.previous_distance = self._distance_to_target()
+            info['reward_breakdown'] = reward_breakdown
             return obs, reward, terminated, truncated, info
 
         # Door open bonus - check ALL doors
@@ -408,41 +591,66 @@ class SimpleRewardWrapper(gym.RewardWrapper):
                 state_now = base_env.grid[door_pos[0], door_pos[1], 2]
                 if state_before == 2 and state_now == 0:  # Was locked, now open
                     reward += REWARD_DOOR_OPEN
+                    reward_breakdown['door_open'] = REWARD_DOOR_OPEN
                     self.previous_distance = self._distance_to_target()
+                    info['reward_breakdown'] = reward_breakdown
                     return obs, reward, terminated, truncated, info
 
-        # Distance reward (only if moving closer/staying same distance)
+        # Distance reward (only if actual path distance decreased)
         current_distance = self._distance_to_target()
-        if current_distance < self.previous_distance:
-            reward += REWARD_CLOSER
-        # Removed penalty for getting further
+        
+        # Only reward if path distance decreased and path is not blocked (distance is not infinity)
+        if current_distance != float('inf') and current_distance < self.previous_distance:
+            # Check if we're targeting a room exit (lower reward to prevent abuse)
+            target = self._get_current_target()
+            
+            # Check if target is a door from a fully explored empty room
+            is_targeting_exit = False
+            for room_idx in range(6):  # Check all 6 rooms
+                room_door = self._get_room_door(room_idx)
+                if target == room_door:
+                    # Target is a door - check if that room is fully explored and empty
+                    if self._is_room_fully_explored(room_idx) and not self._room_has_useful_item(room_idx):
+                        is_targeting_exit = True
+                        break
+            
+            if is_targeting_exit:
+                reward += REWARD_CLOSER_TO_EXIT
+                reward_breakdown['closer_to_target'] = REWARD_CLOSER_TO_EXIT
+            else:
+                reward += REWARD_CLOSER
+                reward_breakdown['closer_to_target'] = REWARD_CLOSER
+        
         self.previous_distance = current_distance
 
-        # Room utility reward/penalty
+        # Room utility reward (only for useful rooms, empty rooms now target the exit via _get_current_target)
         current_room = self._get_room_index(new_pos)
         if current_room != -1:  # Not in corridor
             # Check if room is fully explored
             if self._is_room_fully_explored(current_room):
                 if current_room not in self.fully_explored_rooms:
                     self.fully_explored_rooms.add(current_room)
-                    # Cache whether room has useful items
-                    self.room_contents[current_room] = self._room_has_useful_item(current_room)
 
-                # Apply penalty/reward based on room contents
-                if current_room in self.room_contents:
-                    if self.room_contents[current_room]:
-                        reward += REWARD_USEFUL_ROOM  # Reward for being in useful room
-                    else:
-                        reward += PENALTY_EMPTY_ROOM  # Penalty for wasting time in empty room
+                # Check if room has useful items (don't cache - items can be picked up!)
+                has_useful_items = self._room_has_useful_item(current_room)
+                
+                # Only give reward for useful rooms (empty rooms handled by targeting exit)
+                if has_useful_items:
+                    reward += REWARD_USEFUL_ROOM  # Reward for being in useful room
+                    reward_breakdown['useful_room'] = REWARD_USEFUL_ROOM
 
         # Penalty for repeating non-moving actions
         if action == self.last_action and not moved:
             self.repeat_count += 1
             if self.repeat_count > 3:
                 reward -= 0.2
+                reward_breakdown['repeat_action_penalty'] = -0.2
         else:
             self.repeat_count = 0
         self.last_action = action
+
+        # Add reward breakdown to info
+        info['reward_breakdown'] = reward_breakdown
 
         return obs, reward, terminated, truncated, info
 
