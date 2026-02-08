@@ -850,12 +850,16 @@ class LockedRoomEnv(gym.Env):
 
 
 
-    def render(self):
-        """Render the environment"""
+    def render(self, fog_of_war=False):
+        """Render the environment
+        
+        Args:
+            fog_of_war: If True, only show what agent has explored
+        """
         if self.render_mode == "console":
             self._render_console()
         elif self.render_mode in ["human", "rgb_array"]:
-            return self._render_pygame()
+            return self._render_pygame(fog_of_war=fog_of_war)
         return None
 
     def _render_console(self):
@@ -881,8 +885,12 @@ class LockedRoomEnv(gym.Env):
                     row += symbols.get(self.grid[y, x, 0], "?")
             print(row)
 
-    def _render_pygame(self):
-        """Pygame rendering"""
+    def _render_pygame(self, fog_of_war=False):
+        """Pygame rendering
+        
+        Args:
+            fog_of_war: If True, only show explored areas (what agent has seen)
+        """
         if self.window is None:
             pygame.init()
             window_size = self.size * self.cell_size
@@ -898,9 +906,25 @@ class LockedRoomEnv(gym.Env):
                 rect = pygame.Rect(
                     x * self.cell_size, y * self.cell_size, self.cell_size, self.cell_size
                 )
-                obj = self.grid[y, x, 0]
-                color_idx = self.grid[y, x, 1]
-                state = self.grid[y, x, 2]
+                
+                # Use explored_map if fog_of_war is enabled, otherwise use full grid
+                if fog_of_war and self.explored_map is not None:
+                    obj = self.explored_map[y, x, 0]
+                    color_idx = self.explored_map[y, x, 1]
+                    state = self.explored_map[y, x, 2]
+                    
+                    # Check if this cell has been explored
+                    is_explored = np.any(self.explored_map[y, x] > 0) or self.explored_map[y, x, 2] == 1
+                    
+                    if not is_explored:
+                        # Unexplored area - show as black/dark fog
+                        pygame.draw.rect(self.window, (30, 30, 30), rect)
+                        pygame.draw.rect(self.window, (50, 50, 50), rect, 1)
+                        continue
+                else:
+                    obj = self.grid[y, x, 0]
+                    color_idx = self.grid[y, x, 1]
+                    state = self.grid[y, x, 2]
 
                 if obj == Objects.WALL:
                     pygame.draw.rect(self.window, (64, 64, 64), rect)

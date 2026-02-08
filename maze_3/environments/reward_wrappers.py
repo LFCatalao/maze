@@ -12,19 +12,25 @@ import numpy as np
 # HYPERPARAMETERS (adjust these for experiments)
 # =============================================================================
 
-REWARD_GOAL = 100.0
-REWARD_CLOSER = 2
-REWARD_CLOSER_TO_EXIT = 0.2  # Reduced reward for moving toward room exit (prevent abuse)
-PENALTY_FURTHER = 0.0  # Removed - already captured by REWARD_CLOSER
-PENALTY_STEP = -0.4
-REWARD_TURN = 0.0
-REWARD_KEY_PICKUP = 20.0
-REWARD_DOOR_OPEN = 20.0
+REWARD_GOAL = 500.0  # Terminal success reward (reduced for better proportion to milestones)
+REWARD_CLOSER = 5.0  # Reward for achieving new best distance to current target (meaningful progress)
+REWARD_CLOSER_TO_EXIT = 2.0  # Reward for moving toward room exit when stuck in empty room
+PENALTY_FURTHER = 0.0  # Not used - progress tracked via best distance
+PENALTY_STEP = -0.5  # Time penalty to encourage efficiency
+PENALTY_NO_MOVE = -5.0  # Heavy penalty for not moving (hitting walls or staying still)
+REWARD_TURN = 0.0  # Not used in omnidirectional movement
+REWARD_KEY_PICKUP = 100.0  # Major milestone reward (reduced to balance with goal)
+REWARD_DOOR_OPEN = 100.0  # Major milestone reward (reduced to balance with goal)
 
 # New exploration rewards
-REWARD_EXPLORATION = 0.2  # Bonus for seeing a new cell
-PENALTY_EMPTY_ROOM = 0  # Penalty per step in fully explored empty room
-REWARD_USEFUL_ROOM = 0  # Reward per step in room with objective
+REWARD_EXPLORATION = 2  # Small bonus for seeing new cells (prevents over-valuing wandering)
+PENALTY_EMPTY_ROOM = -0.1  #Penalty per step in fully explored empty room (encourages leaving)
+REWARD_USEFUL_ROOM = 0.0  # Small reward per step in room with objective (encourages staying on task)
+
+# Anti-oscillation penalties
+PENALTY_REVISIT = -1.5  # Meaningful penalty for repeat visits (scaled with visit count)
+PENALTY_DIRECTION_CHANGE = 0.0  # Disabled - no penalty for changing direction
+PENALTY_REVERSAL = -5.0  # Strong penalty for 180° direction reversal (prevent back-and-forth)
 
 
 # =============================================================================
@@ -65,13 +71,24 @@ def get_room(pos):
 # =============================================================================
 
 
-class SimpleObs(gym.ObservationWrapper):
-    """Simple observation with key support - updated for omnidirectional movement."""
+class LegacySimpleObs(gym.ObservationWrapper):
+    """
+    Legacy simple observation wrapper (10 features) for backward compatibility with old models.
+    
+    Observation space (10 features):
+    - agent_y, agent_x (2)
+    - goal_y, goal_x (2)
+    - has_key (1 if carrying any key, 0 otherwise) (1)
+    - key_y, key_x (position of first key, or -1 if none/picked up) (2)
+    - door_y, door_x (position of first door, or -1 if none) (2)
+    - door_locked (1 if locked, 0 if open, -1 if no door) (1)
+    
+    Total: 10 features
+    """
 
     def __init__(self, env):
         super().__init__(env)
-        # Reduced from 12 to 10 since we removed direction and direction-dependent fields
-        self.observation_space = spaces.Box(0, 20, (10,), np.float32)
+        self.observation_space = spaces.Box(-1, 20, (10,), np.float32)
 
     def observation(self, obs):
         base_env = self.env
@@ -81,37 +98,196 @@ class SimpleObs(gym.ObservationWrapper):
         agent_y, agent_x = base_env.agent_pos
         goal_y, goal_x = base_env.goal_pos
 
-        # Key info
+        # Do we have any key?
         has_key = 1.0 if base_env.carrying is not None else 0.0
 
-        # Key position
+        # First key position (if any)
         key_y, key_x = -1.0, -1.0
         if hasattr(base_env, "key_positions") and base_env.key_positions:
-            if base_env.carrying is None:
-                key_pos = list(base_env.key_positions.keys())[0]
-                key_y, key_x = float(key_pos[0]), float(key_pos[1])
+            first_key = list(base_env.key_positions.keys())[0]
+            key_y, key_x = float(first_key[0]), float(first_key[1])
 
-        # Door position
+        # First door position and state
         door_y, door_x = -1.0, -1.0
+        door_locked = -1.0
         if hasattr(base_env, "door_positions") and base_env.door_positions:
-            door_pos = list(base_env.door_positions.keys())[0]
-            door_y, door_x = float(door_pos[0]), float(door_pos[1])
+            first_door = list(base_env.door_positions.keys())[0]
+            door_y, door_x = float(first_door[0]), float(first_door[1])
+            color, state = base_env.door_positions[first_door]
+            # state: 0=open, 1=closed, 2=locked
+            door_locked = 1.0 if state == 2 else 0.0
 
         return np.array(
             [
-                agent_y,
-                agent_x,
-                goal_y,
-                goal_x,
+                float(agent_y),
+                float(agent_x),
+                float(goal_y),
+                float(goal_x),
                 has_key,
                 key_y,
                 key_x,
                 door_y,
                 door_x,
-                0.0,  # Placeholder for compatibility
+                door_locked,
             ],
             dtype=np.float32,
         )
+
+
+class SimpleObs(gym.ObservationWrapper):
+    """
+    Observation wrapper that provides positions of ALL keys and doors.
+    
+    Observation space (34 features):
+    - agent_y, agent_x (2)
+    - goal_y, goal_x (2)
+    - carrying (color of key being carried, or -1) (1)
+    - key_1_y, key_1_x, key_1_color, key_1_visible (4)
+    - key_2_y, key_2_x, key_2_color, key_2_visible (4)
+    - key_3_y, key_3_x, key_3_color, key_3_visible (4)
+    - key_4_y, key_4_x, key_4_color, key_4_visible (4)
+    - door_1_y, door_1_x, door_1_color, door_1_state (4)
+    - door_2_y, door_2_x, door_2_color, door_2_state (4)
+    - door_3_y, door_3_x, door_3_color, door_3_state (4)
+    - door_4_y, door_4_x, door_4_color, door_4_state (4)
+    
+    Total: 2 + 2 + 1 + 4*4 + 4*4 = 37 features (but we use 34 by removing redundant info)
+    
+    NOTE: This wrapper discards the 7x7 partial view and explored_map from the base environment.
+    For agents that need spatial awareness, use EnhancedObs instead.
+    """
+
+    def __init__(self, env):
+        super().__init__(env)
+        # Agent (2) + Goal (2) + Carrying (1) + Keys (4*4=16) + Doors (4*3=12) = 33
+        # Adding 1 padding for total of 34
+        self.observation_space = spaces.Box(-1, 20, (34,), np.float32)
+        self.max_keys = 4
+        self.max_doors = 4
+
+    def observation(self, obs):
+        base_env = self.env
+        while hasattr(base_env, "env"):
+            base_env = base_env.env
+
+        agent_y, agent_x = base_env.agent_pos
+        goal_y, goal_x = base_env.goal_pos
+
+        # What key are we carrying? (-1 if none, otherwise color)
+        carrying = float(base_env.carrying) if base_env.carrying is not None else -1.0
+
+        obs_list = [
+            float(agent_y),
+            float(agent_x),
+            float(goal_y),
+            float(goal_x),
+            carrying,
+        ]
+
+        # Add key information (up to 4 keys)
+        keys = []
+        if hasattr(base_env, "key_positions") and base_env.key_positions:
+            for key_pos, key_color in base_env.key_positions.items():
+                keys.append({
+                    'y': float(key_pos[0]),
+                    'x': float(key_pos[1]),
+                    'color': float(key_color),
+                    'visible': 1.0  # Key is still on grid (not picked up)
+                })
+        
+        # Pad to exactly 4 keys
+        while len(keys) < self.max_keys:
+            keys.append({'y': -1.0, 'x': -1.0, 'color': -1.0, 'visible': 0.0})
+        
+        # Add first 4 keys to observation
+        for i in range(self.max_keys):
+            obs_list.extend([keys[i]['y'], keys[i]['x'], keys[i]['color'], keys[i]['visible']])
+
+        # Add door information (up to 4 doors)
+        doors = []
+        if hasattr(base_env, "door_positions") and base_env.door_positions:
+            for door_pos, (door_color, door_state) in base_env.door_positions.items():
+                doors.append({
+                    'y': float(door_pos[0]),
+                    'x': float(door_pos[1]),
+                    'color': float(door_color),
+                    'state': float(door_state)  # 0=open, 1=closed, 2=locked
+                })
+        
+        # Pad to exactly 4 doors
+        while len(doors) < self.max_doors:
+            doors.append({'y': -1.0, 'x': -1.0, 'color': -1.0, 'state': -1.0})
+        
+        # Add first 4 doors to observation (using 3 features per door: y, x, state)
+        # Color is implicit from position, so we skip it to save space
+        for i in range(self.max_doors):
+            obs_list.extend([doors[i]['y'], doors[i]['x'], doors[i]['state']])
+
+        # Pad to 34 total features
+        while len(obs_list) < 34:
+            obs_list.append(0.0)
+
+        return np.array(obs_list[:34], dtype=np.float32)
+
+
+class EnhancedObs(gym.ObservationWrapper):
+    """
+    Enhanced observation that provides complete information:
+    1. Agent position (2 features) - where am I?
+    2. Carrying key color (1 feature) - what am I holding?
+    3. Flattened 7x7 partial view (147 features) - what's around me?
+    4. Full explored map (1083 features) - what have I seen?
+       - Encodes: walls, doors (with colors and states), keys (with colors), goal
+    
+    Total: 2 + 1 + 147 + 1083 = 1233 features
+    
+    This provides complete spatial awareness with memory of explored areas.
+    """
+
+    def __init__(self, env):
+        super().__init__(env)
+        # Agent pos (2) + carrying (1) + 7x7 view (147) + explored map (19x19x3 = 1083) = 1233
+        self.observation_space = spaces.Box(-1, 255, (1233,), np.float32)
+
+    def observation(self, obs):
+        base_env = self.env
+        while hasattr(base_env, "env"):
+            base_env = base_env.env
+
+        # 1. Agent position (2 features)
+        agent_y, agent_x = base_env.agent_pos
+        agent_pos = np.array([float(agent_y), float(agent_x)], dtype=np.float32)
+
+        # 2. Carrying key color (1 feature: -1 if none, else color index)
+        carrying = float(base_env.carrying) if base_env.carrying is not None else -1.0
+        carrying_array = np.array([carrying], dtype=np.float32)
+
+        # 3. Flatten 7x7 partial view (147 features)
+        # This shows immediate surroundings: walls, doors, keys, goal
+        if isinstance(obs, dict) and 'image' in obs:
+            partial_view = obs['image'].flatten().astype(np.float32)
+        else:
+            partial_view = np.zeros(7 * 7 * 3, dtype=np.float32)
+
+        # 4. Full explored map (1083 features = 19x19x3)
+        # This is the memory of what the agent has seen:
+        # - Channel 0: object type (0=empty, 1=wall, 2=door, 3=key, 4=goal)
+        # - Channel 1: color (for keys and doors)
+        # - Channel 2: state (for doors: 0=open, 1=closed, 2=locked)
+        if isinstance(obs, dict) and 'explored_map' in obs:
+            explored_map = obs['explored_map'].flatten().astype(np.float32)
+        else:
+            explored_map = np.zeros(19 * 19 * 3, dtype=np.float32)
+
+        # Combine all features
+        full_obs = np.concatenate([
+            agent_pos,        # 2
+            carrying_array,   # 1
+            partial_view,     # 147
+            explored_map      # 1083
+        ])
+        
+        return full_obs
 
 
 # =============================================================================
@@ -124,11 +300,17 @@ class SimpleRewardWrapper(gym.RewardWrapper):
     Three-phase reward: key -> door -> goal
     All bonuses are one-time only to prevent exploitation.
     Includes exploration bonus and room utility penalties.
+    
+    Anti-exploitation mechanisms:
+    1. Best-distance tracking: Only reward when achieving new minimum distance
+    2. Position history: Penalize revisiting recent positions
+    3. Movement momentum: Penalize frequent direction changes
     """
 
     def __init__(self, env):
         super().__init__(env)
         self.previous_distance = None
+        self.best_distance = None  # Track best (minimum) distance achieved
         # One-time bonus flags
         self.gave_pickup_hint = False
         self.gave_door_hint = False
@@ -139,6 +321,10 @@ class SimpleRewardWrapper(gym.RewardWrapper):
         self.explored_cells = set()  # Track all cells agent has seen
         self.fully_explored_rooms = set()  # Track rooms that are fully explored
         self.room_contents = {}  # Cache what's in each room {room_idx: has_useful_item}
+        # Anti-oscillation tracking
+        self.position_history = []  # Track recent positions to detect oscillation
+        self.max_history_length = 50  # Keep last 10 positions
+        self.last_direction = None  # Track movement direction for momentum
 
     def _get_base_env(self):
         base_env = self.env
@@ -243,21 +429,23 @@ class SimpleRewardWrapper(gym.RewardWrapper):
         if 7 <= x <= 11:
             return -1
 
-        # Left side rooms
+        # Left side rooms (y boundaries: 1-5, 7-11, 13-17 to exclude wall rows 6, 12)
         if x < 7:
-            if y <= 5:
+            if y < 6:  # Changed from y <= 5 to be more explicit
                 return 0
-            if y <= 11:
+            if 7 <= y < 12:  # Exclude wall row 6, include 7-11
                 return 1
-            return 2
+            if y >= 13:  # Exclude wall row 12, include 13+
+                return 2
 
         # Right side rooms
         if x > 11:
-            if y <= 5:
+            if y < 6:
                 return 3
-            if y <= 11:
+            if 7 <= y < 12:
                 return 4
-            return 5
+            if y >= 13:
+                return 5
 
         return -1
 
@@ -376,17 +564,16 @@ class SimpleRewardWrapper(gym.RewardWrapper):
         queue = deque([(pos, 0)])  # (position, distance)
         visited = {pos}
         
-        # For keys and doors, we need to reach adjacent cells
+        # For doors we need to TOGGLE, we need to reach adjacent cells (to toggle them)
+        # For keys, we need to be ON TOP of them (reach the exact position)
+        # For exit doors (just passing through), we need to reach the door itself
         need_adjacent = False
-        if (
-            base_env.carrying is None
-            and hasattr(base_env, "key_positions")
-            and base_env.key_positions
-        ):
-            need_adjacent = True
-        elif hasattr(base_env, "door_positions") and base_env.door_positions:
+        
+        # Check if targeting a door we need to unlock (not an exit door)
+        if hasattr(base_env, "door_positions") and base_env.door_positions:
             for door_pos, (door_color, door_state) in base_env.door_positions.items():
-                if door_state == 2 and door_color == base_env.carrying:
+                # Only need adjacent if we're targeting a locked door we can unlock
+                if door_state == 2 and door_color == base_env.carrying and target == door_pos:
                     if self._is_position_explored(door_pos):
                         need_adjacent = True
                     break
@@ -516,6 +703,7 @@ class SimpleRewardWrapper(gym.RewardWrapper):
     def reset(self, **kwargs):
         obs, info = self.env.reset(**kwargs)
         self.previous_distance = self._distance_to_target()
+        self.best_distance = self.previous_distance  # Initialize best distance
         # Reset all flags
         self.gave_pickup_hint = False
         self.gave_door_hint = False
@@ -525,13 +713,16 @@ class SimpleRewardWrapper(gym.RewardWrapper):
         self.explored_cells = set()
         self.fully_explored_rooms = set()
         self.room_contents = {}
+        # Reset anti-oscillation tracking
+        self.position_history = []
+        self.last_direction = None
         # Initialize with current view
         self._update_explored_cells(obs)
         return obs, info
 
     def step(self, action):
-        old_pos = tuple(self.env.agent_pos)
         base_env = self._get_base_env()
+        old_pos = tuple(base_env.agent_pos)
         had_key_before = base_env.carrying is not None
         key_color_before = base_env.carrying
 
@@ -543,7 +734,7 @@ class SimpleRewardWrapper(gym.RewardWrapper):
 
         obs, base_reward, terminated, truncated, info = self.env.step(action)
 
-        new_pos = tuple(self.env.agent_pos)
+        new_pos = tuple(base_env.agent_pos)
         moved = old_pos != new_pos
         has_key_now = base_env.carrying is not None
 
@@ -554,9 +745,13 @@ class SimpleRewardWrapper(gym.RewardWrapper):
             'key_pickup': 0.0,
             'door_open': 0.0,
             'closer_to_target': 0.0,
+            'closer_to_exit': 0.0,
             'useful_room': 0.0,
             'empty_room_penalty': 0.0,
             'repeat_action_penalty': 0.0,
+            'revisit_penalty': 0.0,
+            'direction_change_penalty': 0.0,
+            'no_move_penalty': 0.0,
             'goal_reached': 0.0,
         }
 
@@ -568,6 +763,11 @@ class SimpleRewardWrapper(gym.RewardWrapper):
 
         reward = PENALTY_STEP
         reward_breakdown['step_penalty'] = PENALTY_STEP
+
+        # Heavy penalty for not moving
+        if not moved:
+            reward += PENALTY_NO_MOVE
+            reward_breakdown['no_move_penalty'] = PENALTY_NO_MOVE
 
         # Exploration bonus - reward for seeing new cells
         new_cells_count = self._update_explored_cells(obs)
@@ -581,6 +781,9 @@ class SimpleRewardWrapper(gym.RewardWrapper):
             reward += REWARD_KEY_PICKUP
             reward_breakdown['key_pickup'] = REWARD_KEY_PICKUP
             self.previous_distance = self._distance_to_target()
+            self.best_distance = self.previous_distance  # Reset best distance for new phase
+            # Clear position history when picking up key (new phase)
+            self.position_history = []
             info['reward_breakdown'] = reward_breakdown
             return obs, reward, terminated, truncated, info
 
@@ -593,14 +796,51 @@ class SimpleRewardWrapper(gym.RewardWrapper):
                     reward += REWARD_DOOR_OPEN
                     reward_breakdown['door_open'] = REWARD_DOOR_OPEN
                     self.previous_distance = self._distance_to_target()
+                    self.best_distance = self.previous_distance  # Reset best distance for new phase
+                    # Clear position history when opening door (new phase)
+                    self.position_history = []
                     info['reward_breakdown'] = reward_breakdown
                     return obs, reward, terminated, truncated, info
 
-        # Distance reward (only if actual path distance decreased)
+        # Track position history for oscillation detection
+        if moved:
+            self.position_history.append(new_pos)
+            if len(self.position_history) > self.max_history_length:
+                self.position_history.pop(0)
+            
+            # Penalty for revisiting recent positions (oscillation detection)
+            position_count = self.position_history.count(new_pos)
+            # print(f"[DEBUG] Position history: {self.position_history}")
+            # print(f"[DEBUG] Current position: {new_pos}, count: {position_count}")
+            if position_count > 1:
+                # Exponential penalty for repeated visits
+                revisit_penalty = PENALTY_REVISIT * (position_count - 1)
+                reward += revisit_penalty
+                reward_breakdown['revisit_penalty'] = revisit_penalty
+                #print(f"[DEBUG] Applied revisit penalty: {revisit_penalty}")
+            
+            # Calculate movement direction for momentum tracking
+            current_direction = (new_pos[0] - old_pos[0], new_pos[1] - old_pos[1])
+            
+            # Penalty for changing direction (reduces oscillation)
+            if self.last_direction is not None and self.last_direction != current_direction:
+                # Check if it's a direct reversal (180° turn - moving in exact opposite direction)
+                if self.last_direction == (-current_direction[0], -current_direction[1]):
+                    direction_penalty = PENALTY_REVERSAL  # Stronger penalty for reversing
+                else:
+                    direction_penalty = PENALTY_DIRECTION_CHANGE  # Mild penalty for direction change
+                reward += direction_penalty
+                reward_breakdown['direction_change_penalty'] = direction_penalty
+            
+            self.last_direction = current_direction
+
+        # Distance reward - ONLY reward when achieving NEW BEST distance
         current_distance = self._distance_to_target()
         
-        # Only reward if path distance decreased and path is not blocked (distance is not infinity)
-        if current_distance != float('inf') and current_distance < self.previous_distance:
+        # Only reward if:
+        # 1. Path exists (distance is not infinity)
+        # 2. We achieved a NEW BEST (better than any previous distance)
+        if current_distance != float('inf') and current_distance < self.best_distance:
             # Check if we're targeting a room exit (lower reward to prevent abuse)
             target = self._get_current_target()
             
@@ -616,10 +856,13 @@ class SimpleRewardWrapper(gym.RewardWrapper):
             
             if is_targeting_exit:
                 reward += REWARD_CLOSER_TO_EXIT
-                reward_breakdown['closer_to_target'] = REWARD_CLOSER_TO_EXIT
+                reward_breakdown['closer_to_exit'] = REWARD_CLOSER_TO_EXIT
             else:
                 reward += REWARD_CLOSER
                 reward_breakdown['closer_to_target'] = REWARD_CLOSER
+            
+            # Update best distance
+            self.best_distance = current_distance
         
         self.previous_distance = current_distance
 

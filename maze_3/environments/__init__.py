@@ -15,7 +15,9 @@ from .configs import (
 )
 from .reward_wrappers import (
     SimpleRewardWrapper,
+    LegacySimpleObs,
     SimpleObs,
+    EnhancedObs,
     apply_reward_wrapper,
     REWARD_WRAPPERS,
     REWARD_GOAL,
