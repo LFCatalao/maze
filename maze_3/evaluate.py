@@ -74,6 +74,7 @@ def create_env(env_id: str, reward_id: str, obs_mode: str, render: bool = True):
         defined_doors=config.defined_doors,
         goal_in_locked_room=config.goal_in_locked_room,
         enable_key_chain=config.enable_key_chain,
+        use_fixed_key_positions=config.use_fixed_key_positions,
         verbose=True,  # Show action feedback
     )
 
@@ -127,7 +128,7 @@ def evaluate_model(
     
     # Set defaults if still None
     if env_id is None:
-        env_id = "E1"
+        env_id = "E7"
     if reward_id is None:
         reward_id = "simple"
     if obs_mode is None:
@@ -347,7 +348,7 @@ def evaluate_model(
 
 
 def run_random_agent(
-    env_id: str = "E1", reward_id: str = "simple", num_episodes: int = 3, delay_ms: int = 150, fog_of_war: bool = True
+    env_id: str = "E7", reward_id: str = "simple", num_episodes: int = 3, delay_ms: int = 150, fog_of_war: bool = True
 ):
     """Run random agent for visualization/debugging"""
     print("=" * 70)
@@ -400,7 +401,7 @@ def run_random_agent(
     env.close()
 
 
-def manual_control(env_id: str = "E1", reward_id: str = "simple", fog_of_war: bool = True):
+def manual_control(env_id: str = "E7", reward_id: str = "simple", fog_of_war: bool = True):
     """Manual keyboard control for testing"""
     print("=" * 70)
     print("MANUAL CONTROL")
@@ -535,9 +536,9 @@ Examples:
     args = parser.parse_args()
 
     if args.manual:
-        manual_control(args.env or "E1", args.reward or "simple", fog_of_war=not args.full_map)
+        manual_control(args.env or "E7", args.reward or "simple", fog_of_war=not args.full_map)
     elif args.random:
-        run_random_agent(args.env or "E1", args.reward or "simple", args.episodes, args.delay, fog_of_war=not args.full_map)
+        run_random_agent(args.env or "E7", args.reward or "simple", args.episodes, args.delay, fog_of_war=not args.full_map)
     elif args.model_path:
         evaluate_model(
             model_path=args.model_path,

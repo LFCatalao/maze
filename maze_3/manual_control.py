@@ -15,10 +15,11 @@ from environments.base_env import LockedRoomEnv, Objects, COLOR_MAP, Colors, Act
 from environments.reward_wrappers import SimpleRewardWrapper
 
 
-def create_test_env_6():
+def create_test_env_7():
     """
-    Create Environment 6 - E6_MULTI_DOOR_RANDOM
-    Fixed agent, random exit behind random door with key chain (5 doors)
+    Create Environment 7 - E7_SEMI_RANDOM
+    Fixed agent, random exit behind random door with key chain (4 doors)
+    Keys are placed at fixed positions within randomly selected rooms
     """
     env = LockedRoomEnv(
         size=19,
@@ -26,7 +27,7 @@ def create_test_env_6():
         render_mode=None,  # We'll handle rendering manually
         max_steps=500,
         agent_view_size=3,  # 7x7 view (2*3+1)
-        # E6_MULTI_DOOR_RANDOM configuration
+        # E7_SEMI_RANDOM configuration
         fixed_agent_pos=(9, 9),  # Center of corridor
         fixed_goal_pos=None,  # Random goal
         num_doors=4,
@@ -35,6 +36,7 @@ def create_test_env_6():
         randomize_doors=True,
         goal_in_locked_room=True,
         enable_key_chain=True,
+        use_fixed_key_positions=True,  # E7: Fixed key positions
         verbose=True,
     )
     # Wrap with reward shaping
@@ -374,8 +376,8 @@ def main():
     pygame.init()
     
     # Create environment
-    print("Creating Environment 6...")
-    env = create_test_env_6()
+    print("Creating Environment 7...")
+    env = create_test_env_7()
     obs, info = env.reset()
     
     # Get base environment for accessing attributes

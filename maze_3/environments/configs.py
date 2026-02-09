@@ -33,9 +33,7 @@ class EnvConfig:
     defined_doors: Optional[List[Dict]] = None
     goal_in_locked_room: bool = False
     enable_key_chain: bool = False
-    defined_doors: Optional[List[Dict]] = None
-    goal_in_locked_room: bool = False
-    enable_key_chain: bool = False
+    use_fixed_key_positions: bool = False
 
     # Observation settings
     observation_mode: str = "full_map"
@@ -192,6 +190,22 @@ E6_MULTI_DOOR_RANDOM = EnvConfig(
     max_steps=500,
 )
 
+# E7: Like E6 but with fixed key positions within their (randomly selected) rooms
+E7_SEMI_RANDOM = EnvConfig(
+    name="E7_semi_random",
+    description="Fixed agent, random exit behind random door, keys in fixed positions within random rooms",
+    fixed_agent_pos=(9, 9),
+    fixed_goal_pos=None,
+    num_doors=4,
+    include_key=True,
+    locked_door=True,
+    randomize_doors=True,
+    goal_in_locked_room=True,
+    enable_key_chain=True,
+    use_fixed_key_positions=True,
+    max_steps=500,
+)
+
 
 # =============================================================================
 # OBSERVATION MODE VARIANTS
@@ -221,6 +235,7 @@ ALL_ENV_CONFIGS = {
     "E5": E5_CUSTOM_DOORS,
     "E5_FIXED": E5_MULTI_DOOR_FIXED,
     "E6_RANDOM": E6_MULTI_DOOR_RANDOM,
+    "E7": E7_SEMI_RANDOM,
 }
 
 

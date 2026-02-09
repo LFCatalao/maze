@@ -113,6 +113,7 @@ class LockedRoomEnv(gym.Env):
         defined_doors: Optional[List[Dict]] = None,
         goal_in_locked_room: bool = False,
         enable_key_chain: bool = False,
+        use_fixed_key_positions: bool = False,
         # Training options
         verbose: bool = False,
     ):
@@ -134,6 +135,7 @@ class LockedRoomEnv(gym.Env):
             defined_doors: List of dicts {'pos': (y,x), 'color': int, 'key_pos': (y,x)|None}
             goal_in_locked_room: If True, random goal is placed in a room behind a locked door
             enable_key_chain: If True, generates a dependency chain of keys and doors
+            use_fixed_key_positions: If True, uses predefined positions for keys within rooms
             verbose: Print action feedback (for debugging)
         """
         super().__init__()
@@ -152,9 +154,20 @@ class LockedRoomEnv(gym.Env):
         self.defined_doors = defined_doors
         self.goal_in_locked_room = goal_in_locked_room
         self.enable_key_chain = enable_key_chain
+        self.use_fixed_key_positions = use_fixed_key_positions
         self.verbose = verbose
         
         self.key_chain_plan = None
+        
+        # Canonical key positions for each room (center of each room)
+        self.room_key_positions = {
+            0: (3, 3),   # Top Left
+            1: (9, 3),   # Mid Left
+            2: (15, 3),  # Bot Left
+            3: (3, 15),  # Top Right
+            4: (9, 15),  # Mid Right
+            5: (15, 15), # Bot Right
+        }
 
         # Action space: 4 discrete actions (omnidirectional)
         self.action_space = spaces.Discrete(4)
@@ -258,7 +271,7 @@ class LockedRoomEnv(gym.Env):
         if not valid:
             return None
             
-        return valid[np.random.randint(len(valid))]
+        return valid[self.np_random.integers(len(valid))]
 
     def _generate_grid(self):
         """Generate the grid layout with walls and door openings"""
@@ -336,19 +349,19 @@ class LockedRoomEnv(gym.Env):
             # Ensure we have enough rooms for the chain + 1 open room
             if self.num_doors > len(all_indices) - 1:
                  # Fallback if too many doors requested
-                 selected_indices = np.random.choice(all_indices, self.num_doors, replace=False)
+                 selected_indices = self.np_random.choice(all_indices, self.num_doors, replace=False)
             else:
-                 selected_indices = np.random.choice(all_indices, self.num_doors, replace=False)
+                 selected_indices = self.np_random.choice(all_indices, self.num_doors, replace=False)
             
             open_indices = [i for i in all_indices if i not in selected_indices]
             
             # Shuffle selected indices to form a chain
             chain_indices = list(selected_indices)
-            np.random.shuffle(chain_indices)
+            self.np_random.shuffle(chain_indices)
             
             # Start room (where the first key is) - must be an open room
             if open_indices:
-                start_room_idx = np.random.choice(open_indices)
+                start_room_idx = self.np_random.choice(open_indices)
             else:
                 start_room_idx = -1 # Corridor or fallback
             
@@ -453,11 +466,15 @@ class LockedRoomEnv(gym.Env):
                     valid = self._get_valid_empty_positions()
                     corridor = [p for p in valid if 8 <= p[1] <= 10]
                     if corridor:
-                        pos = corridor[np.random.randint(len(corridor))]
+                        pos = corridor[self.np_random.integers(len(corridor))]
                     else:
-                        pos = valid[np.random.randint(len(valid))]
+                        pos = valid[self.np_random.integers(len(valid))]
                 else:
-                    pos = self._get_random_pos_in_room(room_idx)
+                    # Use fixed position if enabled, otherwise random
+                    if self.use_fixed_key_positions and room_idx in self.room_key_positions:
+                        pos = self.room_key_positions[room_idx]
+                    else:
+                        pos = self._get_random_pos_in_room(room_idx)
                 
                 if pos:
                     self.grid[pos[0], pos[1], 0] = Objects.KEY
@@ -522,7 +539,7 @@ class LockedRoomEnv(gym.Env):
             
             if rooms_without_doors and keys_remaining:
                 # Pick a room without a door
-                room_idx = np.random.choice(list(rooms_without_doors))
+                room_idx = self.np_random.choice(list(rooms_without_doors))
                 # Pick a key
                 key_color = keys_remaining.pop(0)
                 
@@ -537,7 +554,7 @@ class LockedRoomEnv(gym.Env):
             # Place remaining keys in remaining available rooms
             # Shuffle available rooms
             avail_list = list(available_rooms)
-            np.random.shuffle(avail_list)
+            self.np_random.shuffle(avail_list)
             
             for key_color in keys_remaining:
                 if not avail_list:
@@ -572,7 +589,7 @@ class LockedRoomEnv(gym.Env):
                 valid_key_positions.append((y, x))
 
         if valid_key_positions:
-            idx = np.random.randint(len(valid_key_positions))
+            idx = self.np_random.integers(len(valid_key_positions))
             key_pos = valid_key_positions[idx]
             key_color = self.locked_door_color if self.locked_door else Colors.BLUE
             self.grid[key_pos[0], key_pos[1], 0] = Objects.KEY
@@ -609,7 +626,7 @@ class LockedRoomEnv(gym.Env):
                         locked_rooms.append(door_to_room[pos])
             
             if locked_rooms:
-                room_idx = locked_rooms[np.random.randint(len(locked_rooms))]
+                room_idx = locked_rooms[self.np_random.integers(len(locked_rooms))]
                 pos = self._get_random_pos_in_room(room_idx)
                 if pos:
                     goal_y, goal_x = pos
@@ -628,7 +645,7 @@ class LockedRoomEnv(gym.Env):
                 if self._get_room((y, x)) != "corridor"
             ]
             if valid_positions:
-                idx = np.random.randint(len(valid_positions))
+                idx = self.np_random.integers(len(valid_positions))
                 goal_y, goal_x = valid_positions[idx]
             else:
                 goal_y, goal_x = 3, 3  # Fallback
@@ -652,12 +669,12 @@ class LockedRoomEnv(gym.Env):
                 ]
 
             if valid_positions:
-                idx = np.random.randint(len(valid_positions))
+                idx = self.np_random.integers(len(valid_positions))
                 agent_y, agent_x = valid_positions[idx]
             else:
                 # Fallback to corridor
-                agent_y = np.random.randint(2, 17)
-                agent_x = np.random.randint(8, 11)
+                agent_y = self.np_random.integers(2, 17)
+                agent_x = self.np_random.integers(8, 11)
 
         self.agent_pos = [agent_y, agent_x]
 
